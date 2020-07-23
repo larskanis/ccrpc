@@ -1,0 +1,15 @@
+.job_template: &job_definition
+  before_script:
+    - ruby -v
+    - bundle install -j$(nproc)
+
+  script:
+    - bundle exec rake test
+
+test-2.3:
+  <<: *job_definition
+  image: comcard/ruby:2.3
+
+test-latest:
+  <<: *job_definition
+  image: comcard/ruby:latest
