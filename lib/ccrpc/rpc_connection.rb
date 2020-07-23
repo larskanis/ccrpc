@@ -51,6 +51,7 @@ class RpcConnection
 
   def initialize(read_io, write_io)
     super()
+
     @read_io = read_io
     @write_io = write_io
     @id = 0
@@ -66,7 +67,7 @@ class RpcConnection
     @read_thread = Thread.new do
       begin
         while IO.select([@read_io, stop_thread_rd])[0].include?(@read_io)
-          l = @read_io.gets&.force_encoding(Encoding::UTF_8)
+          l = @read_io.gets&.force_encoding(Encoding::BINARY)
           @read_queue << l
           break if l.nil?
         end
@@ -162,11 +163,11 @@ class RpcConnection
       case l
         when Exception
           raise l
-        when /\A([^\t\a\n]+)\t(.*)\n\z/m
+        when /\A([^\t\a\n]+)\t(.*)\n\z/mn
           # received key/value pair used for either callback parameters or return values
-          rets[Escape.unescape($1)] ||= Escape.unescape($2)
+          rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
 
-        when /\A([^\t\a\n]+)(?:\a(\d+))?\n\z/m
+        when /\A([^\t\a\n]+)(?:\a(\d+))?\n\z/mn
           # received callback
           cbfunc, id = $1, $2
           @read_mutex.unlock
@@ -176,7 +177,7 @@ class RpcConnection
               raise NoCallbackDefined, "A callback was received, but #{self.class}#call was called without a block"
             end
 
-            callback = Call.new(self, Escape.unescape(cbfunc).to_sym, rets, id)
+            callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
 
             rets, exit = yield(callback)
             if rets
@@ -189,7 +190,7 @@ class RpcConnection
             @read_mutex.lock
           end
 
-        when /\A\a(\d+)\n\z/m
+        when /\A\a(\d+)\n\z/mn
           # received return event
           id = $1.to_i
           @answers_mutex.synchronize do
