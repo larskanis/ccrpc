@@ -68,7 +68,7 @@ class TestRpcConnection < Minitest::Test
                 when :callback
                   call.conn.call('callback', call.params, &pr)
                 else
-                  { 'Error' => "Unexpected function received: \#{func.inspect}" }
+                  { 'Error' => "Unexpected function received: \#{call.func.inspect}" }
               end
             end
             nil
