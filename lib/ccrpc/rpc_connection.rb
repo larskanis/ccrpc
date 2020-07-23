@@ -128,31 +128,26 @@ class RpcConnection
   end
 
   def send_call(func, params, id)
-    to_send = String.new
-    params.reject{|k,v| v.nil? }.each do |key, value|
-      to_send << Escape.escape(key.to_s) << "\t" << Escape.escape(value.to_s) << "\n"
-    end
-    to_send << Escape.escape(func.to_s)
-    to_send << "\a#{id}\n"
-
     @write_mutex.synchronize do
-      @write_io.write to_send
-      @write_io.flush
+      params.reject{|k,v| v.nil? }.each do |key, value|
+        @write_io.write Escape.escape(key.to_s) << "\t" <<
+            Escape.escape(value.to_s) << "\n"
+      end
+      @write_io.write Escape.escape(func.to_s) << "\a#{id}\n"
     end
+    @write_io.flush
     after_write
   end
 
   def send_answer(answer, id)
-    to_send = String.new
-    answer.reject{|k,v| v.nil? }.each do |key, value|
-      to_send << Escape.escape(key.to_s) << "\t" << Escape.escape(value.to_s) << "\n"
-    end
-    to_send << (id ? "\a#{id}\n" : "\n")
-
     @write_mutex.synchronize do
-      @write_io.write to_send
-      @write_io.flush
+      answer.reject{|k,v| v.nil? }.each do |key, value|
+        @write_io.write Escape.escape(key.to_s) << "\t" <<
+            Escape.escape(value.to_s) << "\n"
+      end
+      @write_io.write id ? "\a#{id}\n" : "\n"
     end
+    @write_io.flush
     after_write
   end
 
