@@ -23,6 +23,8 @@ class RpcConnection
   end
   class ConnectionDetached < RuntimeError
   end
+  class ReceiverAlreadyDefined < RuntimeError
+  end
 
   class Call
     attr_reader :conn
@@ -41,8 +43,12 @@ class RpcConnection
 
     def answer=(value)
       raise DoubleAnswerError, "More than one answer to #{self.inspect}" if @answer
-      conn.send_answer(value, id)
+      conn.send(:send_answer, value, id)
       @answer = value
+    end
+
+    def call_back(func, params={}, &block)
+      conn.send(:send_and_wait, func, params, @id, &block)
     end
   end
 
@@ -54,13 +60,15 @@ class RpcConnection
 
     @read_io = read_io
     @write_io = write_io
-    @id = 0
+    @id = rand(1000)
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
     @write_mutex = Mutex.new
     @close_mutex = Mutex.new
     @answers = {}
+    @receivers = {}
     @answers_mutex = Mutex.new
+    @receivers_mutex = Mutex.new
     @new_answer = ConditionVariable.new
     @read_queue = Queue.new
     stop_thread_rd, @stop_thread_wr = IO.pipe
@@ -92,33 +100,57 @@ class RpcConnection
 
   def call(func=nil, params={}, &block)
     if func
-      id = next_id
-      send_call(func, params, id)
-
-      @answers_mutex.synchronize do
-        loop do
-          if a=@answers.delete(id)
-            break a
-          elsif @read_mutex.try_lock
-            @answers_mutex.unlock
-            begin
-              break if receive_answers(&block)
-            ensure
-              @read_mutex.unlock
-              @answers_mutex.lock
-              @new_answer.signal
-            end
-          else
-            @new_answer.wait(@answers_mutex)
-          end
+      send_and_wait(func, params, &block)
+    else
+      register_receiver(nil, block || caller[0..1])
+      @read_mutex.synchronize do
+        until receive_answers
         end
       end
-    else
-      @read_mutex.synchronize do
-        until receive_answers(&block)
+      deregister_receiver(nil)
+    end
+  end
+
+  protected
+  def register_receiver(id, block)
+    @receivers_mutex.synchronize do
+      raise ReceiverAlreadyDefined, "Receiver block already defined in #{block.inspect}" if @receivers[id]
+      @receivers[id] = block
+    end
+  end
+
+  def deregister_receiver(id)
+    @receivers_mutex.synchronize do
+      @receivers.delete(id)
+    end
+  end
+
+  def send_and_wait(func, params, recv_id=nil, &block)
+    id = next_id
+    register_receiver(id, block || caller[1..2])
+    send_call(func, params, id, recv_id)
+
+    res = @answers_mutex.synchronize do
+      loop do
+        if a=@answers.delete(id)
+          break a
+        elsif @read_mutex.try_lock
+          @answers_mutex.unlock
+          begin
+            break if receive_answers
+          ensure
+            @read_mutex.unlock
+            @answers_mutex.lock
+            @new_answer.signal
+          end
+        else
+          @new_answer.wait(@answers_mutex)
         end
       end
     end
+
+    deregister_receiver(id)
+    res
   end
 
   def next_id
@@ -127,13 +159,15 @@ class RpcConnection
     end
   end
 
-  def send_call(func, params, id)
+  def send_call(func, params, id, recv_id=nil)
     @write_mutex.synchronize do
       params.reject{|k,v| v.nil? }.each do |key, value|
         @write_io.write Escape.escape(key.to_s) << "\t" <<
             Escape.escape(value.to_s) << "\n"
       end
-      @write_io.write Escape.escape(func.to_s) << "\a#{id}\n"
+      to_send = Escape.escape(func.to_s) << "\a#{id}"
+      to_send << "\a#{recv_id}" if recv_id
+      @write_io.write to_send << "\n"
     end
     @write_io.flush
     after_write
@@ -151,7 +185,6 @@ class RpcConnection
     after_write
   end
 
-  protected
   def receive_answers
     rets = {}
     while l=@read_queue.pop
@@ -162,19 +195,24 @@ class RpcConnection
           # received key/value pair used for either callback parameters or return values
           rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
 
-        when /\A([^\t\a\n]+)(?:\a(\d+))?\n\z/mn
+        when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\n\z/mn
           # received callback
-          cbfunc, id = $1, $2
+          cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
           @read_mutex.unlock
 
           begin
-            unless block_given?
+            block_or_meth = @receivers_mutex.synchronize do
+              @receivers[recv_id]
+            end
+            if !block_or_meth
               raise NoCallbackDefined, "A callback was received, but #{self.class}#call was called without a block"
+            elsif block_or_meth.is_a?(Array)
+              raise NoCallbackDefined, "A callback was received, but #{block_or_meth[0]} was called without a block in #{block_or_meth[1]}"
             end
 
             callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
 
-            rets, exit = yield(callback)
+            rets, exit = block_or_meth.call(callback)
             if rets
               callback.answer = rets
             end

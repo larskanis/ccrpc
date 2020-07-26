@@ -66,7 +66,7 @@ class TestRpcConnection < Minitest::Test
                 when :echo
                   call.params
                 when :callback
-                  call.conn.call('callback', call.params, &pr)
+                  call.call_back('callbacko', call.params, &pr)
                 else
                   { 'Error' => "Unexpected function received: \#{call.func.inspect}" }
               end
@@ -129,10 +129,10 @@ class TestRpcConnection < Minitest::Test
 
   def process_callback(call)
     case call.func
-      when :callback
+      when :callbacko
         depth = call.params['depth'].to_i
-        if depth < 3
-          call.conn.call('callback', call.params.merge('depth' => depth+1), &method(:process_callback))
+        if depth < 1
+          call.call_back('callback', call.params.merge('depth' => depth+1), &method(:process_callback))
         else
           { bindata_back: call.params['bindata'].reverse, thx: call.params['thx'] }
         end
@@ -150,24 +150,22 @@ class TestRpcConnection < Minitest::Test
 
   def test_threads(channel)
     with_connection(channel) do |c|
-      ths = 10.times.map do |thx|
+      ths = 2.times.map do |thx|
         Thread.new do
-          c.call('echo', thx: thx, bindata: @bindata)
+          c.call('callback', depth: 0, thx: thx, bindata: @bindata, &method(:process_callback))
         end
       end
 
       ths = ths.map do |th|
         Thread.new do
-          v = th.value
-          v['']
-          v
+          th.value
         end
       end
 
       ths.each.with_index do |th, thx|
         r = th.value
         assert_equal thx, r['thx'].to_i
-        assert_equal @bindata, r['bindata']
+        assert_equal @bindata.reverse, r['bindata_back']
       end
     end
   end
