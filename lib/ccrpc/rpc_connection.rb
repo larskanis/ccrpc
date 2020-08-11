@@ -60,6 +60,11 @@ class RpcConnection
 
     @read_io = read_io
     @write_io = write_io
+
+    if @write_io.respond_to?(:setsockopt)
+      @write_io.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, true)
+    end
+
     @id = rand(1000)
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
@@ -160,26 +165,37 @@ class RpcConnection
   end
 
   def send_call(func, params, id, recv_id=nil)
+    to_send = String.new
     @write_mutex.synchronize do
       params.reject{|k,v| v.nil? }.each do |key, value|
-        @write_io.write Escape.escape(key.to_s) << "\t" <<
+        to_send << Escape.escape(key.to_s) << "\t" <<
             Escape.escape(value.to_s) << "\n"
+        if to_send.bytesize > 9999
+          @write_io.write to_send
+          to_send = String.new
+        end
       end
-      to_send = Escape.escape(func.to_s) << "\a#{id}"
+      to_send << Escape.escape(func.to_s) << "\a#{id}"
       to_send << "\a#{recv_id}" if recv_id
-      @write_io.write to_send << "\n"
+      @write_io.write(to_send << "\n")
     end
     @write_io.flush
     after_write
   end
 
   def send_answer(answer, id)
+    to_send = String.new
     @write_mutex.synchronize do
       answer.reject{|k,v| v.nil? }.each do |key, value|
-        @write_io.write Escape.escape(key.to_s) << "\t" <<
+        to_send << Escape.escape(key.to_s) << "\t" <<
             Escape.escape(value.to_s) << "\n"
+        if to_send.bytesize > 9999
+          @write_io.write to_send
+          to_send = String.new
+        end
       end
-      @write_io.write id ? "\a#{id}\n" : "\n"
+      to_send << "\a#{id}" if id
+      @write_io.write(to_send << "\n")
     end
     @write_io.flush
     after_write
