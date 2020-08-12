@@ -19,6 +19,8 @@ class RpcConnection
   end
   class NoCallbackDefined < RuntimeError
   end
+  class CallAlreadyReturned < NoCallbackDefined
+  end
   class DoubleResultError < RuntimeError
   end
   class ConnectionDetached < RuntimeError
@@ -43,14 +45,17 @@ class RpcConnection
 
     def answer=(value)
       raise DoubleAnswerError, "More than one answer to #{self.inspect}" if @answer
-      conn.send(:send_answer, value, id)
       @answer = value
+      conn.send(:send_answer, value, id)
     end
 
     def call_back(func, params={}, &block)
-      conn.send(:send_and_wait, func, params, @id, &block)
+      raise CallAlreadyReturned, "Callback is no longer possible since the call already returned #{self.inspect}" if @answer
+      conn.send(:call_intern, func, params, @id, &block)
     end
   end
+
+  CallbackReceiver = Struct.new :meth, :callbacks
 
   attr_accessor :read_io
   attr_accessor :write_io
@@ -73,7 +78,6 @@ class RpcConnection
     @answers = {}
     @receivers = {}
     @answers_mutex = Mutex.new
-    @receivers_mutex = Mutex.new
     @new_answer = ConditionVariable.new
     @read_queue = Queue.new
     stop_thread_rd, @stop_thread_wr = IO.pipe
@@ -104,41 +108,37 @@ class RpcConnection
   end
 
   def call(func=nil, params={}, &block)
-    if func
-      send_and_wait(func, params, &block)
-    else
-      register_receiver(nil, block || caller[0..1])
-      @read_mutex.synchronize do
-        until receive_answers
-        end
-      end
-      deregister_receiver(nil)
-    end
+    call_intern(func, params, &block)
   end
 
   protected
-  def register_receiver(id, block)
-    @receivers_mutex.synchronize do
-      raise ReceiverAlreadyDefined, "Receiver block already defined in #{block.inspect}" if @receivers[id]
-      @receivers[id] = block
+
+  def call_intern(func, params={}, recv_id=nil, &block)
+    id = next_id if func
+
+    @answers_mutex.synchronize do
+      @receivers[id] = CallbackReceiver.new(block_given? ? nil : caller[3], [])
     end
-  end
 
-  def deregister_receiver(id)
-    @receivers_mutex.synchronize do
-      @receivers.delete(id)
-    end
-  end
+    send_call(func, params, id, recv_id) if func
 
-  def send_and_wait(func, params, recv_id=nil, &block)
-    id = next_id
-    register_receiver(id, block || caller[1..2])
-    send_call(func, params, id, recv_id)
+    @answers_mutex.synchronize do
+      res = loop do
+        if cb=@receivers[id].callbacks.shift
+          @answers_mutex.unlock
+          begin
+            rets, exit = yield(cb)
+            if rets
+              cb.answer = rets
+            end
+            break if exit
+          ensure
+            @answers_mutex.lock
+          end
 
-    res = @answers_mutex.synchronize do
-      loop do
-        if a=@answers.delete(id)
+        elsif a=@answers.delete(id)
           break a
+
         elsif @read_mutex.try_lock
           @answers_mutex.unlock
           begin
@@ -148,14 +148,16 @@ class RpcConnection
             @answers_mutex.lock
             @new_answer.signal
           end
+
         else
           @new_answer.wait(@answers_mutex)
         end
       end
-    end
 
-    deregister_receiver(id)
-    res
+      @receivers.delete(id)
+
+      res
+    end
   end
 
   def next_id
@@ -214,30 +216,26 @@ class RpcConnection
         when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\n\z/mn
           # received callback
           cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
-          @read_mutex.unlock
 
-          begin
-            block_or_meth = @receivers_mutex.synchronize do
-              @receivers[recv_id]
-            end
-            if !block_or_meth
-              raise NoCallbackDefined, "A callback was received, but #{self.class}#call was called without a block"
-            elsif block_or_meth.is_a?(Array)
-              raise NoCallbackDefined, "A callback was received, but #{block_or_meth[0]} was called without a block in #{block_or_meth[1]}"
-            end
+          callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
 
-            callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
+          @answers_mutex.synchronize do
+            receiver = @receivers[recv_id]
 
-            rets, exit = block_or_meth.call(callback)
-            if rets
-              callback.answer = rets
+            if !receiver
+              if recv_id
+                raise NoCallbackDefined, "call_back to #{cbfunc.inspect} was received, but corresponding call returned already"
+              else
+                raise NoCallbackDefined, "call to #{cbfunc.inspect} was received, but there is no #{self.class}#call running"
+              end
+            elsif meth=receiver.meth
+              raise NoCallbackDefined, "call_back to #{cbfunc.inspect} was received, but corresponding call was called without a block in #{meth}"
             end
 
-            rets = {}
-            return true if exit
-          ensure
-            @read_mutex.lock
+            receiver.callbacks << callback
+            @new_answer.broadcast
           end
+          return
 
         when /\A\a(\d+)\n\z/mn
           # received return event

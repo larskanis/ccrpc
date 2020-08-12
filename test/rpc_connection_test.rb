@@ -65,8 +65,10 @@ class TestRpcConnection < Minitest::Test
               call.answer = case call.func
                 when :echo
                   call.params
-                when :callback
-                  call.call_back('callbacko', call.params, &pr)
+                when :callbacka
+                  call.conn.call('callbackaa', call.params, &pr)
+                when :callbacko
+                  call.call_back('callbackoo', call.params, &pr)
                 else
                   { 'Error' => "Unexpected function received: \#{call.func.inspect}" }
               end
@@ -94,6 +96,55 @@ class TestRpcConnection < Minitest::Test
     define_method("test_legacy_call_#{channel}"){ test_legacy_call(channel) }
     define_method("test_detach_#{channel}"){ test_detach(channel) }
     define_method("test_transmission_buffer_overflow_#{channel}"){ test_transmission_buffer_overflow(channel) }
+    define_method("test_call_back_#{channel}"){ test_call_back(channel) }
+  end
+
+  def test_call_already_returned
+    assert_raises(Ccrpc::RpcConnection::CallAlreadyReturned) do
+      with_connection(:pipe) do |c|
+        c.call(:callbacko) do |callback|
+          callback.answer = {}
+          callback.call_back(:echo)
+        end
+      end
+    end
+  end
+
+  def test_callback_without_block
+    err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
+      with_connection(:pipe) do |c|
+        c.call(:callbacko)
+      end
+    end
+    assert_match(/"callbackoo".*called without a block.*test_callback_without_block/, err.message)
+  end
+
+  def test_anonymous_callback_without_block
+    called = false
+    err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
+      with_connection(:pipe) do |c|
+        c.call(:callbacka) do |call|
+          called = true
+        end
+      end
+    end
+    refute called, "a call-specific block shouldn't be called"
+    assert_match(/"callbackaa".*no Ccrpc::RpcConnection#call running/, err.message)
+  end
+
+  def test_anonymous_callback
+    recv_call = nil
+    with_connection(:pipe) do |c|
+      Thread.new do
+        c.call do |call|
+          recv_call = call
+          [{}, true]
+        end
+      end
+      c.call(:callbacka, {a: 3})
+    end
+    assert_equal :callbackaa, recv_call.func
+    assert_equal({"a" => "3"}, recv_call.params)
   end
 
   private
@@ -129,10 +180,10 @@ class TestRpcConnection < Minitest::Test
 
   def process_callback(call)
     case call.func
-      when :callbacko
+      when :callbackoo
         depth = call.params['depth'].to_i
         if depth < 1
-          call.call_back('callback', call.params.merge('depth' => depth+1), &method(:process_callback))
+          call.call_back('callbacko', call.params.merge('depth' => depth+1), &method(:process_callback))
         else
           { bindata_back: call.params['bindata'].reverse, thx: call.params['thx'] }
         end
@@ -143,22 +194,16 @@ class TestRpcConnection < Minitest::Test
 
   def test_recursive(channel)
     with_connection(channel) do |c|
-      r = c.call('callback', bindata: @bindata, depth: 0, &method(:process_callback))
+      r = c.call('callbacko', bindata: @bindata, depth: 0, &method(:process_callback))
       assert_equal({ 'bindata_back' => @bindata.reverse }, r)
     end
   end
 
   def test_threads(channel)
     with_connection(channel) do |c|
-      ths = 2.times.map do |thx|
+      ths = 100.times.map do |thx|
         Thread.new do
-          c.call('callback', depth: 0, thx: thx, bindata: @bindata, &method(:process_callback))
-        end
-      end
-
-      ths = ths.map do |th|
-        Thread.new do
-          th.value
+          c.call('callbacko', depth: 0, thx: thx, bindata: @bindata, &method(:process_callback))
         end
       end
 
@@ -222,6 +267,24 @@ class TestRpcConnection < Minitest::Test
       end
       results.each_with_index do |res, idx|
         assert_equal({'idx' => idx.to_s, 'data' => some_data}, res)
+      end
+    end
+  end
+
+  def test_call_back(channel)
+    with_connection(channel) do |c|
+      ths = 100.times.map do |thx|
+        Thread.new(thx) do |thy|
+          c.call('callbacko') do |call|
+            { thy: thy, th: Thread.current.object_id }
+          end
+        end
+      end
+
+      ths.each.with_index do |th, thx|
+        r = th.value
+        assert_equal thx, r['thy'].to_i
+        assert_equal th.object_id, r['th'].to_i
       end
     end
   end
