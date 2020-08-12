@@ -23,8 +23,6 @@ class RpcConnection
   end
   class DoubleResultError < RuntimeError
   end
-  class ConnectionDetached < RuntimeError
-  end
   class ReceiverAlreadyDefined < RuntimeError
   end
 
@@ -79,29 +77,27 @@ class RpcConnection
     @receivers = {}
     @answers_mutex = Mutex.new
     @new_answer = ConditionVariable.new
-    @read_queue = Queue.new
     stop_thread_rd, @stop_thread_wr = IO.pipe
-    @read_thread = Thread.new do
+
+    @read_enum = Enumerator.new do |y|
       begin
         while IO.select([@read_io, stop_thread_rd])[0].include?(@read_io)
           l = @read_io.gets&.force_encoding(Encoding::BINARY)
-          @read_queue << l
           break if l.nil?
+          y << l
         end
-        @read_queue << ConnectionDetached.new("connection already detached")
       rescue => err
-        @read_queue << err
+        y << err
       end
     end
   end
 
   def detach
     @close_mutex.synchronize do
-      if @read_thread
+      if @read_enum
         @stop_thread_wr.write "x"
         @stop_thread_wr.close
-        @read_thread.join
-        @read_thread = nil
+        @read_enum = nil
         @stop_thread_wr = nil
       end
     end
@@ -205,7 +201,7 @@ class RpcConnection
 
   def receive_answers
     rets = {}
-    while l=@read_queue.pop
+    @read_enum.each do |l|
       case l
         when Exception
           raise l
