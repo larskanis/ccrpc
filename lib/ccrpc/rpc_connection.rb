@@ -68,6 +68,7 @@ class RpcConnection
       @write_io.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, true)
     end
 
+    # A random number as call ID is not technically required, but makes transferred data more readable.
     @id = rand(1000)
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
