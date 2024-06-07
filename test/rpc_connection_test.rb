@@ -5,7 +5,7 @@ require 'socket'
 require 'timeout'
 
 class TestRpcConnection < Minitest::Test
-  def pipe_connection
+  def pipe_connection(testname)
     omit "No fork" if RUBY_PLATFORM=~/mingw|mswin/
     ar, aw = IO.pipe
     br, bw = IO.pipe
@@ -19,7 +19,7 @@ class TestRpcConnection < Minitest::Test
     [ar, bw]
   end
 
-  def socket_connection
+  def socket_connection(testname)
     s = TCPServer.new 0
     a = TCPSocket.new 'localhost', s.addr[1]
     _b = s.accept
@@ -33,10 +33,11 @@ class TestRpcConnection < Minitest::Test
     [a, a]
   end
 
-  def popen_connection
+  def popen_connection(testname)
     code = <<-EOT
       $: << #{File.expand_path("../../lib", __FILE__).inspect}
       require 'ccrpc'
+      testname = #{testname.inspect}
       #{server_code("STDIN", "STDOUT")}
     EOT
     tf = Tempfile.new('rpc')
@@ -61,7 +62,7 @@ class TestRpcConnection < Minitest::Test
             sleep(call.params["sleep"].to_i)
             call.params
           else
-            Thread.new do
+            th = Thread.new do
               call.answer = case call.func
                 when :echo
                   call.params
@@ -73,6 +74,7 @@ class TestRpcConnection < Minitest::Test
                   { 'Error' => "Unexpected function received: \#{call.func.inspect}" }
               end
             end
+            th.name = testname
             nil
         end
       end
@@ -150,7 +152,7 @@ class TestRpcConnection < Minitest::Test
   private
 
   def with_connection(channel)
-    ios = send("#{channel}_connection")
+    ios = send("#{channel}_connection", caller[0])
     c = Ccrpc::RpcConnection.new(*ios)
     yield(c)
     c.detach
@@ -158,7 +160,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   def with_ios(channel)
-    ios = send("#{channel}_connection")
+    ios = send("#{channel}_connection", caller[0])
     yield(*ios)
     ios.each{|io| io.close unless io.closed? }
   end
@@ -290,7 +292,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   public def test_kill_process
-    ios = popen_connection
+    ios = popen_connection(__method__)
     c = Ccrpc::RpcConnection.new(*ios)
     th = Thread.new do
       c.call(:sleep, sleep: 20)
