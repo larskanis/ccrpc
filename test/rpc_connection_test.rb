@@ -278,7 +278,7 @@ class TestRpcConnection < Minitest::Test
       ths = 100.times.map do |thx|
         Thread.new(thx) do |thy|
           c.call('callbacko') do |call|
-            { thy: thy, th: Thread.current.object_id }
+            { thy: thy, th: Thread.current.object_id, func: call.func }
           end
         end
       end
@@ -287,6 +287,7 @@ class TestRpcConnection < Minitest::Test
         r = th.value
         assert_equal thx, r['thy'].to_i
         assert_equal th.object_id, r['th'].to_i
+        assert_equal 'callbackoo', r['func']
       end
     end
   end
