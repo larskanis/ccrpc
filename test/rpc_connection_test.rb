@@ -4,8 +4,10 @@ require 'rbconfig'
 require 'socket'
 require 'timeout'
 
+# Thread.abort_on_exception = true
+
 class TestRpcConnection < Minitest::Test
-  def pipe_connection(testname)
+  def pipe_connection(testname, report_on_exception)
     omit "No fork" if RUBY_PLATFORM=~/mingw|mswin/
     ar, aw = IO.pipe
     br, bw = IO.pipe
@@ -19,13 +21,12 @@ class TestRpcConnection < Minitest::Test
     [ar, bw]
   end
 
-  def socket_connection(testname)
+  def socket_connection(testname, report_on_exception)
     s = TCPServer.new 0
     a = TCPSocket.new s.addr[2], s.addr[1]
     _b = s.accept
     s.close
 
-    Thread.abort_on_exception = true
     Thread.new do
       eval(server_code("_b", "_b"))
     end
@@ -33,11 +34,12 @@ class TestRpcConnection < Minitest::Test
     [a, a]
   end
 
-  def popen_connection(testname)
+  def popen_connection(testname, report_on_exception)
     code = <<-EOT
       $: << #{File.expand_path("../../lib", __FILE__).inspect}
       require 'ccrpc'
       testname = #{testname.inspect}
+      report_on_exception = #{report_on_exception.inspect}
       #{server_code("STDIN", "STDOUT")}
     EOT
     tf = Tempfile.new('rpc')
@@ -75,6 +77,7 @@ class TestRpcConnection < Minitest::Test
               end
             end
             th.name = testname
+            th.report_on_exception = report_on_exception
             nil
         end
       end
@@ -114,7 +117,7 @@ class TestRpcConnection < Minitest::Test
 
   def test_callback_without_block
     err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
-      with_connection(:pipe) do |c|
+      with_connection(:pipe, report_on_exception: false) do |c|
         c.call(:callbacko)
       end
     end
@@ -124,7 +127,7 @@ class TestRpcConnection < Minitest::Test
   def test_anonymous_callback_without_block
     called = false
     err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
-      with_connection(:pipe) do |c|
+      with_connection(:pipe, report_on_exception: false) do |c|
         c.call(:callbacka) do |call|
           called = true
         end
@@ -151,16 +154,16 @@ class TestRpcConnection < Minitest::Test
 
   private
 
-  def with_connection(channel)
-    ios = send("#{channel}_connection", caller[0])
+  def with_connection(channel, report_on_exception: true)
+    ios = send("#{channel}_connection", caller[0], report_on_exception)
     c = Ccrpc::RpcConnection.new(*ios)
     yield(c)
     c.detach
     ios.each{|io| io.close unless io.closed? }
   end
 
-  def with_ios(channel)
-    ios = send("#{channel}_connection", caller[0])
+  def with_ios(channel, report_on_exception: true)
+    ios = send("#{channel}_connection", caller[0], report_on_exception)
     yield(*ios)
     ios.each{|io| io.close unless io.closed? }
   end
@@ -293,7 +296,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   public def test_kill_process
-    ios = popen_connection(__method__)
+    ios = popen_connection(__method__, true)
     c = Ccrpc::RpcConnection.new(*ios)
     th = Thread.new do
       c.call(:sleep, sleep: 20)
