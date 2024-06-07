@@ -21,7 +21,7 @@ class TestRpcConnection < Minitest::Test
 
   def socket_connection(testname)
     s = TCPServer.new 0
-    a = TCPSocket.new 'localhost', s.addr[1]
+    a = TCPSocket.new s.addr[2], s.addr[1]
     _b = s.accept
     s.close
 
