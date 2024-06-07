@@ -73,16 +73,14 @@ class RpcConnection
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
     @write_mutex = Mutex.new
-    @close_mutex = Mutex.new
     @answers = {}
     @receivers = {}
     @answers_mutex = Mutex.new
     @new_answer = ConditionVariable.new
-    stop_thread_rd, @stop_thread_wr = IO.pipe
 
     @read_enum = Enumerator.new do |y|
       begin
-        while IO.select([@read_io, stop_thread_rd])[0].include?(@read_io)
+        while @read_enum
           l = @read_io.gets&.force_encoding(Encoding::BINARY)
           break if l.nil?
           y << l
@@ -94,14 +92,7 @@ class RpcConnection
   end
 
   def detach
-    @close_mutex.synchronize do
-      if @read_enum
-        @stop_thread_wr.write "x"
-        @stop_thread_wr.close
-        @read_enum = nil
-        @stop_thread_wr = nil
-      end
-    end
+    @read_enum = nil
   end
 
   def call(func=nil, params={}, &block)
