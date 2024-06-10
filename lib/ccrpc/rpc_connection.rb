@@ -28,13 +28,19 @@ class RpcConnection
   class ReceiverAlreadyDefined < RuntimeError
   end
 
+  # The context of a received call.
   class Call
+    # @return [RpcConnection]  The used connection.
     attr_reader :conn
+    # @return [String]  Called function
     attr_reader :func
+    # @return [Hash{String => String}] List of parameters passed with the call.
     attr_reader :params
     attr_reader :id
+    # @return [Hash{String => String}] List of parameters send back to the called.
     attr_reader :answer
 
+    # @private
     def initialize(conn, func, params={}, id)
       @conn = conn
       @func = func
@@ -43,12 +49,26 @@ class RpcConnection
       @answer = nil
     end
 
+    # Send the answer back to the caller.
+    #
+    # @param [Hash{String, Symbol => String, Symbol}] value  The answer parameters to be sent to the caller.
     def answer=(value)
       raise DoubleAnswerError, "More than one answer to #{self.inspect}" if @answer
       @answer = value
       conn.send(:send_answer, value, id)
     end
 
+    # Send a dedicated callback to the caller's block.
+    #
+    # If {RpcConnection#call} is called with both function name and block, then it's possible to call back to this dedicated block through {#call_back} .
+    # The library ensures, that the callback ends up in the corresponding call block and in the same thread as the caller, even if there are multiple simultaneous calls are running at the same time in different threads or by using +lazy_answers+ .
+    #
+    # @param func [String, Symbol]  The RPC function to be called on the other side.
+    #   The other side must wait for calls through {#call} with function name and with a block.
+    # @param params [Hash{Symbol, String => Symbol, String}]  Optional parameters passed with the RPC call.
+    #   They can be retrieved through {Call#params} on the receiving side.
+    #
+    # Yielded parameters and returned objects are described in {RpcConnection#call}.
     def call_back(func, params={}, &block)
       raise CallAlreadyReturned, "Callback is no longer possible since the call already returned #{self.inspect}" if @answer
       conn.send(:call_intern, func, params, @id, &block)
@@ -60,17 +80,28 @@ class RpcConnection
   attr_accessor :read_io
   attr_accessor :write_io
 
-  def initialize(read_io, write_io)
+  # Create a RPC connection
+  #
+  # @param [IO] read_io   readable IO object for reception of data
+  # @param [IO] write_io   writable IO object for transmission of data
+  # @param [Boolean] lazy_answers   Enable or disable lazy results. See {#call} for more description.
+  def initialize(read_io, write_io, lazy_answers: false)
     super()
 
     @read_io = read_io
     @write_io = write_io
+    if lazy_answers
+      require 'ccrpc/lazy'
+      alias maybe_lazy do_lazy
+    else
+      alias maybe_lazy dont_lazy
+    end
 
     if @write_io.respond_to?(:setsockopt)
       @write_io.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, true)
     end
 
-    # A random number as call ID is not technically required, but makes transferred data more readable.
+    # A random number as start call ID is not technically required, but makes transferred data more readable.
     @id = rand(1000)
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
@@ -93,10 +124,47 @@ class RpcConnection
     end
   end
 
+  private def do_lazy(&block)
+    Promise.new(&block)
+  end
+  private def dont_lazy
+    yield
+  end
+
+  # Disable reception of data from the read_io object.
+  #
+  # This function doesn't close the IO objects.
+  # A waiting reception is not aborted by this call.
+  # It can be aborted by calling IO#close on the underlying read_io and write_io objects.
   def detach
     @read_enum = nil
   end
 
+  # Do a RPC call and/or wait for a RPC call from the other side.
+  #
+  # {#call} must be called with either a function name (and optional parameters) or with a block or with both.
+  # If {#call} is called with a function name, the block on the other side of the RPC connection is called with that function name.
+  # If {#call} is called with a block only, than it receives these kind of calls, which are called anonymous callbacks.
+  # If {#call} is called with a function name and a block, then the RPC function on the other side is called and it is possible to call back to this dedicated block by invoking {Call#call_back} .
+  #
+  # @param func [String, Symbol]  The RPC function to be called on the other side.
+  #   The other side must wait for calls through {#call} without arguments but with a block.
+  # @param params [Hash{Symbol, String => Symbol, String}]  Optional parameters passed with the RPC call.
+  #   They can be retrieved through {Call#params} on the receiving side.
+  #
+  # @yieldparam [Ccrpc::Call] block  The context of the received call.
+  # @yieldreturn [Hash{String, Symbol => String, Symbol}] The answer parameters to be sent back to the caller.
+  # @yieldreturn [Array<Hash>] Two element array with the answer parameters as the first element and +true+ as the second.
+  #   By this answer type the answer is sent to other side but the reception of further calls or callbacks is stopped subsequently and the local corresponding {#call} method returns with +nil+.
+  #
+  # @return [Hash]  Received answer parameters.
+  # @return [Promise] Received answer parameters enveloped by a Promise.
+  #   This type of answers can be enabled by +RpcConnection#new(lazy_answers: true)+
+  #   The Promise object is returned as soon as the RPC call is sent, but before waiting for the corresponding answer.
+  #   This way several calls can be send in parallel without using threads.
+  #   As soon as a method is called on the Promise object, this method is blocked until the RPC answer was received.
+  #   The Promise object then behaves like a Hash object.
+  # @return [NilClass] Waiting for further answers was stopped gracefully by either returning +[hash, true]+ from the block or because the connection was closed.
   def call(func=nil, params={}, &block)
     call_intern(func, params, &block)
   end
@@ -112,42 +180,45 @@ class RpcConnection
 
     send_call(func, params, id, recv_id) if func
 
-    @answers_mutex.synchronize do
-      res = loop do
-        if cb=@receivers[id].callbacks.shift
-          @answers_mutex.unlock
-          begin
-            rets, exit = yield(cb)
-            if rets
-              cb.answer = rets
+    pr = proc do
+      @answers_mutex.synchronize do
+        res = loop do
+          if cb=@receivers[id].callbacks.shift
+            @answers_mutex.unlock
+            begin
+              rets, exit = yield(cb)
+              if rets
+                cb.answer = rets
+              end
+              break if exit
+            ensure
+              @answers_mutex.lock
             end
-            break if exit
-          ensure
-            @answers_mutex.lock
+
+          elsif a=@answers.delete(id)
+            break a
+
+          elsif @read_mutex.try_lock
+            @answers_mutex.unlock
+            begin
+              break if receive_answers
+            ensure
+              @read_mutex.unlock
+              @answers_mutex.lock
+              @new_answer.signal
+            end
+
+          else
+            @new_answer.wait(@answers_mutex)
           end
-
-        elsif a=@answers.delete(id)
-          break a
-
-        elsif @read_mutex.try_lock
-          @answers_mutex.unlock
-          begin
-            break if receive_answers
-          ensure
-            @read_mutex.unlock
-            @answers_mutex.lock
-            @new_answer.signal
-          end
-
-        else
-          @new_answer.wait(@answers_mutex)
         end
+
+        @receivers.delete(id)
+
+        res
       end
-
-      @receivers.delete(id)
-
-      res
     end
+    func ? maybe_lazy(&pr) : pr.call
   end
 
   def next_id
@@ -244,8 +315,8 @@ class RpcConnection
     return true
   end
 
+  # Can be overwritten by subclasses to make use of idle time while waiting for answers.
   def after_write
-    # can be overwritten to make use of idle time
   end
 end
 end

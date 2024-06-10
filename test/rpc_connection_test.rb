@@ -233,14 +233,14 @@ class TestRpcConnection < Minitest::Test
   end
 
   public def test_call_self_async
-    skip "this doesn't work since result to RpcConnection#call is no longer Lazy"
     r, w = IO.pipe
-    c = Ccrpc::RpcConnection.new(r, w)
+    c = Ccrpc::RpcConnection.new(r, w, lazy_answers: true)
     res = c.call("exit")
     c.call do |call|
       [{shutdown: [call.func, call.params]}, true]
     end
     assert_equal({'shutdown' => '[:exit, {}]'}, res)
+    r.close; w.close
   end
 
   def test_detach(channel)
@@ -304,15 +304,13 @@ class TestRpcConnection < Minitest::Test
 
   public def test_kill_process
     ios = popen_connection(__method__, true)
-    c = Ccrpc::RpcConnection.new(*ios)
-    th = Thread.new do
-      c.call(:sleep, sleep: 20)
-    end
+    c = Ccrpc::RpcConnection.new(*ios, lazy_answers: true)
+    res = c.call(:sleep, sleep: 20)
     sleep 0.1
     Process.kill(9, ios[0].pid)
 
 #     assert_raises(Ccrpc::RpcConnection::ConnectionDetached) do
-    assert_nil th.value
+    assert_nil res
 #     end
     c.detach
     ios.each{|io| io.close unless io.closed? }
