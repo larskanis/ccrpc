@@ -295,6 +295,13 @@ class TestRpcConnection < Minitest::Test
     end
   end
 
+  public def test_detach_error
+    rd, wr = IO.pipe
+    c = Ccrpc::RpcConnection.new(rd, wr)
+    c.detach
+    assert_raises(Ccrpc::RpcConnection::ConnectionDetached){ c.call(:dummy) }
+  end
+
   public def test_kill_process
     ios = popen_connection(__method__, true)
     c = Ccrpc::RpcConnection.new(*ios)

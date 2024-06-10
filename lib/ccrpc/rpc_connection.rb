@@ -23,6 +23,8 @@ class RpcConnection
   end
   class DoubleResultError < RuntimeError
   end
+  class ConnectionDetached < RuntimeError
+  end
   class ReceiverAlreadyDefined < RuntimeError
   end
 
@@ -193,7 +195,7 @@ class RpcConnection
 
   def receive_answers
     rets = {}
-    @read_enum.each do |l|
+    (@read_enum || raise(ConnectionDetached, "connection already detached")).each do |l|
       case l
         when Exception
           raise l
