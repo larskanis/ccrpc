@@ -1,3 +1,4 @@
+# -*- frozen_string_literal: true -*-
 # = lazy.rb -- Lazy evaluation in Ruby
 #
 # Author:: MenTaLguY
