@@ -1,8 +1,16 @@
-# Ccrpc
+# Ccrpc - A minimalistic RPC library for Ruby
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/ccrpc`. To experiment with that code, run `bin/console` for an interactive prompt.
+Features:
+* Simple human readable based RPC protocol
+* Works on arbitrary ruby IO objects (Pipes, Sockets, STDIN, STDOUT)
+* No object definitions - only plain string transfers
+* Each call transfers a function name and a list of parameters in form of a Hash<String=>String>
+* Each response equally transfers a list of parameters
+* Similar to closures, it's possible to respond to a particular call
+* Fully asynchronous either by use of multiple threads or by using lazy_answers
+* Doesn't use threads, but is fully thread safe
+* Each call_back arrives in the thread of the caller
 
-TODO: Delete this and the text above, and describe your gem
 
 ## Installation
 
@@ -22,7 +30,69 @@ Or install it yourself as:
 
 ## Usage
 
-TODO: Write usage instructions here
+Fork a subprocess and communicate with it through pipes
+```ruby
+  require 'ccrpc'
+
+  ar, aw = IO.pipe # pipe to send data to the forking process
+  br, bw = IO.pipe # pipe to send data to the forked process
+  fork do
+    ar.close; bw.close
+    # Create the receiver side of the connection
+    rpc = Ccrpc::RpcConnection.new(br, aw)
+    # Wait for calls
+    rpc.call do |call|
+      # Print the received call data
+      pp func: call.func, params: call.params  # =>  {:func=>:hello, :params=>{"who"=>"world"}}
+      # The answer of the subprocess
+      {my_answer: 'hello back'}
+    end
+  end
+  br.close; aw.close
+
+  # Create the caller side of the connection
+  rpc = Ccrpc::RpcConnection.new(ar, bw)
+  # Call function "hello" with param {"who" => "world"}
+  pp rpc.call(:hello, who: 'world')  # => {"my_answer"=>"hello back"}
+```
+
+Communicate with a subprocess through STDIN and STDOUT.
+Since STDIN and STDOUT are used for the RPC connection, it's best zu redirect STDOUT to STDERR after the RPC object is created.
+This avoids clashes between "p" calls and the RPC protocol.
+
+```ruby
+  require 'ccrpc'
+
+  # The code of the subprocess:
+  code = <<-EOT
+    require 'ccrpc'
+    # Create the receiver side of the connection
+    # Use a copy of STDOUT because...
+    rpc = Ccrpc::RpcConnection.new(STDIN, STDOUT.dup)
+    # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
+    STDOUT.reopen(STDERR)
+    # Wait for calls
+    rpc.call do |call|
+      # Print the received call data to STDERR
+      pp func: call.func, params: call.params  # =>  {:func=>:hello, :params=>{"who"=>"world"}}
+      # The answer of the subprocess
+      {my_answer: 'hello back'}
+    end
+  EOT
+
+  # Write the code to a temp file
+  tf = Tempfile.new('rpc')
+  tf.write(code)
+  tf.flush
+  # Execute the temp file in a subprocess
+  io = IO.popen(['ruby', tf.path], "w+")
+
+  # Create the caller side of the connection
+  rpc = Ccrpc::RpcConnection.new(io, io)
+  # Call function "hello" with param {"who" => "world"}
+  pp rpc.call(:hello, who: 'world')  # => {"my_answer"=>"hello back"}
+```
+
 
 ## Development
 
@@ -32,7 +102,7 @@ To install this gem onto your local machine, run `bundle exec rake install`. To 
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/ccrpc.
+Bug reports and pull requests are welcome on GitHub at https://github.com/larskanis/ccrpc.
 
 
 ## License
