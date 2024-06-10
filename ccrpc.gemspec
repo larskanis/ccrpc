@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.description   = %q{Simple bidirectional and thread safe RPC protocol. Works on arbitrary Ruby IO objects.}
   spec.homepage      = "http://gitlab.comcard-nt.de/edv/ccrpc"
   spec.license       = "MIT"
-  spec.required_ruby_version = Gem::Requirement.new(">= 2.5.0")
+  spec.required_ruby_version = Gem::Requirement.new(">= 2.7.0")
 
   spec.metadata["allowed_push_host"] = "http://ccgems"
 

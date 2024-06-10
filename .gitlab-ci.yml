@@ -6,9 +6,9 @@
   script:
     - bundle exec rake test
 
-test-2.5:
+test-2.7:
   <<: *job_definition
-  image: comcard/ruby:2.5
+  image: comcard/ruby:2.7
 
 test-latest:
   <<: *job_definition
