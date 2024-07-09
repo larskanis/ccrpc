@@ -45,7 +45,7 @@ class TestRpcConnection < Minitest::Test
     tf = Tempfile.new('rpc')
     tf.write(code)
     tf.close
-    @tempfile = tf # Speichern des Dateihandles, damit Datei nicht eher gelöscht wird als von ruby geöffnet (speziell unter Windows)
+    @tempfile = tf # Save the file handle, so that the file not not deleted before opened by ruby (especially on Windows)
 
     io = IO.popen([RbConfig::CONFIG['ruby_install_name'], tf.path], "w+")
     [io, io]
