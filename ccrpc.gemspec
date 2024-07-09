@@ -4,15 +4,13 @@ Gem::Specification.new do |spec|
   spec.name          = "ccrpc"
   spec.version       = Ccrpc::VERSION
   spec.authors       = ["Lars Kanis"]
-  spec.email         = ["kanis@comcard.de"]
+  spec.email         = ["lars@greiz-reinsdorf.de"]
 
   spec.summary       = %q{Simple bidirectional RPC protocol}
   spec.description   = %q{Simple bidirectional and thread safe RPC protocol. Works on arbitrary Ruby IO objects.}
-  spec.homepage      = "https://gitlab.comcard-nt.de/edv/ccrpc"
+  spec.homepage      = "https://github.com/larskanis/ccrpc"
   spec.license       = "MIT"
   spec.required_ruby_version = Gem::Requirement.new(">= 2.7.0")
-
-  spec.metadata["allowed_push_host"] = "https://ccgems"
 
   spec.metadata["homepage_uri"] = spec.homepage
 

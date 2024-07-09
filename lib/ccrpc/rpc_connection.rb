@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # -*- frozen_string_literal: true -*-
 ###########################################################################
-#    Copyright (C) 2015 by Lars Kanis
-#    <kanis@comcard.de>
+#    Copyright (C) 2015 to 2024 by Lars Kanis
+#    <lars@greiz-reinsdorf.de>
 #
 # Copyright: See COPYING file that comes with this distribution
 ###########################################################################
