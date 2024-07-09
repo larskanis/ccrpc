@@ -8,7 +8,8 @@ require 'timeout'
 
 class TestRpcConnection < Minitest::Test
   def pipe_connection(testname, report_on_exception)
-    omit "No fork" if RUBY_PLATFORM=~/mingw|mswin/
+    skip "No fork" unless Process.respond_to?(:fork)
+
     ar, aw = IO.pipe
     br, bw = IO.pipe
     fork do
