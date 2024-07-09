@@ -183,6 +183,7 @@ class RpcConnection
     pr = proc do
       @answers_mutex.synchronize do
         res = loop do
+          # Is a callback pending for this thread?
           if cb=@receivers[id].callbacks.shift
             @answers_mutex.unlock
             begin
@@ -195,9 +196,11 @@ class RpcConnection
               @answers_mutex.lock
             end
 
+          # Is a call return pending for this thread?
           elsif a=@answers.delete(id)
             break a
 
+          # Unless some other thread is already reading from the read_io, do it now
           elsif @read_mutex.try_lock
             @answers_mutex.unlock
             begin
@@ -205,9 +208,11 @@ class RpcConnection
             ensure
               @read_mutex.unlock
               @answers_mutex.lock
+              # Send signal possibly again to prevent deadlock if another thread started waiting before we re-locked the @answers_mutex
               @new_answer.signal
             end
 
+          # Wait for signal from other thread about a new call return or callback was received
           else
             @new_answer.wait(@answers_mutex)
           end
