@@ -304,6 +304,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   public def test_kill_process
+    skip "not reliable on JRuby on Windows" if RUBY_ENGINE=="jruby" && RbConfig::CONFIG['host_os']=~/mingw|mswin/i
     ios = popen_connection(__method__, true)
     c = Ccrpc::RpcConnection.new(*ios, lazy_answers: true)
     res = c.call(:sleep, sleep: 20)
