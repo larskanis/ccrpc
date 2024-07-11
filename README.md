@@ -2,14 +2,15 @@
 
 Features:
 * Simple human readable based RPC protocol
-* Works on arbitrary ruby IO objects (Pipes, Sockets, STDIN, STDOUT)
+* Works on arbitrary ruby IO objects (Pipes, Sockets, STDIN, STDOUT) even Windows CR/LF converting IOs
 * No object definitions - only plain string transfers
 * Each call transfers a function name and a list of parameters in form of a Hash<String=>String>
 * Each response equally transfers a list of parameters
-* Similar to closures, it's possible to respond to a particular call
+* Similar to closures, it's possible to respond to a particular call as a call_back
 * Fully asynchronous either by use of multiple threads or by using lazy_answers
 * Doesn't use threads, but is fully thread safe
 * Each call_back arrives in the thread of the caller
+* No dependencies
 
 
 ## Installation
