@@ -98,6 +98,8 @@ The following example invokes the call in the opposite direction, from the subpr
   # call returns when the IO is closed by the subprocess
 ```
 
+Full API documentation is here: https://rubydoc.info/gems/ccrpc
+
 
 ## Development
 
