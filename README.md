@@ -1,15 +1,16 @@
 # Ccrpc - A minimalistic RPC library for Ruby
 
 Features:
-* Simple human readable based RPC protocol
+* Simple human readable wire protocol
 * Works on arbitrary ruby IO objects (Pipes, Sockets, STDIN, STDOUT) even Windows CR/LF converting IOs
-* No object definitions - only plain string transfers
+* No object definitions - only plain string transfers (so no issues with undefined classes or garbage collection like in DRb)
 * Each call transfers a function name and a list of parameters in form of a Hash<String=>String>
 * Each response equally transfers a list of parameters
 * Similar to closures, it's possible to respond to a particular call as a call_back
 * Fully asynchronous either by use of multiple threads or by using lazy_answers
 * Doesn't use threads, but is fully thread safe
 * Each call_back arrives in the thread of the caller
+* Only dedicated functions can be called (not arbitrary as in DRb)
 * No dependencies
 
 
