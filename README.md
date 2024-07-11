@@ -7,8 +7,8 @@ Features:
 * Each call transfers a function name and a list of parameters in form of a Hash<String=>String>
 * Each response equally transfers a list of parameters
 * Similar to closures, it's possible to respond to a particular call as a call_back
-* Fully asynchronous either by use of multiple threads or by using lazy_answers
-* Doesn't use threads, but is fully thread safe
+* Fully asynchronous, either by use of multiple threads or by using lazy_answers, so that arbitrary calls in both directions can be mixed simultaneously without blocking each other
+* Fully thread safe, but doesn't use additional internal threads
 * Each call_back arrives in the thread of the caller
 * Only dedicated functions can be called (not arbitrary as in DRb)
 * No dependencies
@@ -62,6 +62,8 @@ Communicate with a subprocess through STDIN and STDOUT.
 Since STDIN and STDOUT are used for the RPC connection, it's best zu redirect STDOUT to STDERR after the RPC object is created.
 This avoids clashes between "p" calls and the RPC protocol.
 
+The following example invokes the call in the opposite direction, from the subprocess to the main process.
+
 ```ruby
   require 'ccrpc'
 
@@ -73,13 +75,8 @@ This avoids clashes between "p" calls and the RPC protocol.
     rpc = Ccrpc::RpcConnection.new(STDIN, STDOUT.dup)
     # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
     STDOUT.reopen(STDERR)
-    # Wait for calls
-    rpc.call do |call|
-      # Print the received call data to STDERR
-      pp func: call.func, params: call.params  # =>  {:func=>:hello, :params=>{"who"=>"world"}}
-      # The answer of the subprocess
-      {my_answer: 'hello back'}
-    end
+    # Call function "hello" with param {"who" => "world"}
+    pp rpc.call(:hello, who: 'world')  # => {"my_answer"=>"hello back"}
   EOT
 
   # Write the code to a temp file
@@ -91,8 +88,14 @@ This avoids clashes between "p" calls and the RPC protocol.
 
   # Create the caller side of the connection
   rpc = Ccrpc::RpcConnection.new(io, io)
-  # Call function "hello" with param {"who" => "world"}
-  pp rpc.call(:hello, who: 'world')  # => {"my_answer"=>"hello back"}
+  # Wait for calls
+  rpc.call do |call|
+    # Print the received call data to STDERR
+    pp func: call.func, params: call.params  # =>  {:func=>:hello, :params=>{"who"=>"world"}}
+    # The answer of the subprocess
+    {my_answer: 'hello back'}
+  end
+  # call returns when the IO is closed by the subprocess
 ```
 
 
