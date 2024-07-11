@@ -24,7 +24,7 @@ class TestRpcConnection < Minitest::Test
 
   def socket_connection(testname, report_on_exception)
     s = TCPServer.new 0
-    a = TCPSocket.new s.addr[2], s.addr[1]
+    a = TCPSocket.new "localhost", s.addr[1]
     _b = s.accept
     s.close
 
@@ -249,7 +249,7 @@ class TestRpcConnection < Minitest::Test
       c.detach
       c.write_io.puts "echo_no_thread"
       c.write_io.close_write
-      assert_equal "\n", c.read_io.gets
+      assert_equal "\n", c.read_io.gets.gsub("\r\n","\n")
       assert_nil c.read_io.gets
     end
   end
@@ -259,8 +259,8 @@ class TestRpcConnection < Minitest::Test
       write_io.puts "a\tb"
       write_io.puts "echo_no_thread"
       write_io.close_write
-      assert_equal "a\tb\n", read_io.gets
-      assert_equal "\n", read_io.gets
+      assert_equal "a\tb\n", read_io.gets.gsub("\r\n","\n")
+      assert_equal "\n", read_io.gets.gsub("\r\n","\n")
       assert_nil read_io.gets
     end
   end

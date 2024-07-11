@@ -5,7 +5,7 @@ module Ccrpc
   module Escape
     def self.escape(data)
       data = data.b if data.frozen? || data.encoding != Encoding::BINARY
-      data.gsub(/([\a\n\t\\])/n){ "\\x" + $1.unpack("H2")[0] }
+      data.gsub(/([\a\r\n\t\\])/n){ "\\x" + $1.unpack("H2")[0] }
     end
 
     def self.unescape(data)

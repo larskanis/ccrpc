@@ -275,11 +275,11 @@ class RpcConnection
       case l
         when Exception
           raise l
-        when /\A([^\t\a\n]+)\t(.*)\n\z/mn
+        when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
           # received key/value pair used for either callback parameters or return values
           rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
 
-        when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\n\z/mn
+        when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
           # received callback
           cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
 
@@ -303,7 +303,7 @@ class RpcConnection
           end
           return
 
-        when /\A\a(\d+)\n\z/mn
+        when /\A\a(\d+)\r?\n\z/mn
           # received return event
           id = $1.to_i
           @answers_mutex.synchronize do
