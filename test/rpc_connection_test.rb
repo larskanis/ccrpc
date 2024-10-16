@@ -138,16 +138,16 @@ class TestRpcConnection < Minitest::Test
     assert_match(/"callbackaa".*no Ccrpc::RpcConnection#call running/, err.message)
   end
 
-  def test_anonymous_callback
+  def test_lazy_anonymous_callback
     recv_call = nil
-    with_connection(:pipe) do |c|
-      Thread.new do
-        c.call do |call|
-          recv_call = call
-          [{}, true]
-        end
+    with_connection(:pipe, lazy_answers: true) do |c|
+      recv = c.call do |call|
+        recv_call = call
+        [{}, true]
       end
-      c.call(:callbacka, {a: 3})
+      call = c.call(:callbacka, {a: 3})
+      recv.itself # wait for the anonymous callback to receive and process the call
+      call.itself # wait for the call to return
     end
     assert_equal :callbackaa, recv_call.func
     assert_equal({"a" => "3"}, recv_call.params)
@@ -155,9 +155,9 @@ class TestRpcConnection < Minitest::Test
 
   private
 
-  def with_connection(channel, report_on_exception: true)
+  def with_connection(channel, report_on_exception: true, lazy_answers: false)
     ios = send("#{channel}_connection", caller[0], report_on_exception)
-    c = Ccrpc::RpcConnection.new(*ios)
+    c = Ccrpc::RpcConnection.new(*ios, lazy_answers: lazy_answers)
     yield(c)
     c.detach
     ios.each{|io| io.close unless io.closed? }
@@ -239,7 +239,7 @@ class TestRpcConnection < Minitest::Test
     res = c.call("exit")
     c.call do |call|
       [{shutdown: [call.func, call.params]}, true]
-    end
+    end.itself  # Call .itself to wait for calls due to lazy_answers:true
     assert_equal({'shutdown' => '[:exit, {}]'}, res)
     r.close; w.close
   end

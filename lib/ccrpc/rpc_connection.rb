@@ -84,7 +84,10 @@ class RpcConnection
   #
   # @param [IO] read_io   readable IO object for reception of data
   # @param [IO] write_io   writable IO object for transmission of data
-  # @param [Boolean] lazy_answers   Enable or disable lazy results. See {#call} for more description.
+  # @param [Boolean] lazy_answers   Enable or disable lazy results.
+  #    If enabled the return value of #call is always a Ccrpc::Promise object.
+  #    It behaves like an ordinary +nil+ or Hash object, but the actual IO blocking operation is delayed to the first method call on the Promise object.
+  #    See {#call} for more description.
   def initialize(read_io, write_io, lazy_answers: false)
     super()
 
@@ -160,10 +163,11 @@ class RpcConnection
   # @return [Hash]  Received answer parameters.
   # @return [Promise] Received answer parameters enveloped by a Promise.
   #   This type of answers can be enabled by +RpcConnection#new(lazy_answers: true)+
-  #   The Promise object is returned as soon as the RPC call is sent, but before waiting for the corresponding answer.
+  #   The Promise object is returned as soon as the RPC call is sent and a callback receiver is registered, but before waiting for the corresponding answer.
   #   This way several calls can be send in parallel without using threads.
   #   As soon as a method is called on the Promise object, this method is blocked until the RPC answer was received.
-  #   The Promise object then behaves like a Hash object.
+  #   The Promise object then behaves like a Hash or +nil+ object.
+  #   It is recommended to use Promise#itself to trigger waiting for call answers or callbacks (although any other method triggers waiting as well).
   # @return [NilClass] Waiting for further answers was stopped gracefully by either returning +[hash, true]+ from the block or because the connection was closed.
   def call(func=nil, params={}, &block)
     call_intern(func, params, &block)
@@ -180,7 +184,7 @@ class RpcConnection
 
     send_call(func, params, id, recv_id) if func
 
-    pr = proc do
+    maybe_lazy do
       @answers_mutex.synchronize do
         res = loop do
           # Is a callback pending for this thread?
@@ -223,7 +227,6 @@ class RpcConnection
         res
       end
     end
-    func ? maybe_lazy(&pr) : pr.call
   end
 
   def next_id
