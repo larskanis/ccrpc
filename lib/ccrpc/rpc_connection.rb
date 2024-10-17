@@ -249,8 +249,8 @@ class RpcConnection
       to_send << Escape.escape(func.to_s) << "\a#{id}"
       to_send << "\a#{recv_id}" if recv_id
       @write_io.write(to_send << "\n")
+      @write_io.flush
     end
-    @write_io.flush
     after_write
   end
 
@@ -267,8 +267,8 @@ class RpcConnection
       end
       to_send << "\a#{id}" if id
       @write_io.write(to_send << "\n")
+      @write_io.flush
     end
-    @write_io.flush
     after_write
   end
 
