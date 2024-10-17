@@ -238,7 +238,7 @@ class RpcConnection
   def send_call(func, params, id, recv_id=nil)
     to_send = String.new
     @write_mutex.synchronize do
-      params.reject{|k,v| v.nil? }.each do |key, value|
+      params.compact.each do |key, value|
         to_send << Escape.escape(key.to_s) << "\t" <<
             Escape.escape(value.to_s) << "\n"
         if to_send.bytesize > 9999
@@ -257,7 +257,7 @@ class RpcConnection
   def send_answer(answer, id)
     to_send = String.new
     @write_mutex.synchronize do
-      answer.reject{|k,v| v.nil? }.each do |key, value|
+      answer.compact.each do |key, value|
         to_send << Escape.escape(key.to_s) << "\t" <<
             Escape.escape(value.to_s) << "\n"
         if to_send.bytesize > 9999
