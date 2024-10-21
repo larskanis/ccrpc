@@ -106,8 +106,8 @@ class TestRpcConnection < Minitest::Test
   end
 
   def test_call_already_returned
-    assert_raises(Ccrpc::RpcConnection::CallAlreadyReturned) do
-      with_connection(:pipe) do |c|
+    with_connection(:pipe) do |c|
+      assert_raises(Ccrpc::RpcConnection::CallAlreadyReturned) do
         c.call(:callbacko) do |callback|
           callback.answer = {}
           callback.call_back(:echo)
@@ -117,8 +117,8 @@ class TestRpcConnection < Minitest::Test
   end
 
   def test_callback_without_block
-    err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
-      with_connection(:pipe, report_on_exception: false) do |c|
+    err = with_connection(:pipe, report_on_exception: false) do |c|
+      assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
         c.call(:callbacko)
       end
     end
@@ -127,8 +127,8 @@ class TestRpcConnection < Minitest::Test
 
   def test_anonymous_callback_without_block
     called = false
-    err = assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
-      with_connection(:pipe, report_on_exception: false) do |c|
+    err = with_connection(:pipe, report_on_exception: false) do |c|
+      assert_raises(Ccrpc::RpcConnection::NoCallbackDefined) do
         c.call(:callbacka) do |call|
           called = true
         end
@@ -158,9 +158,10 @@ class TestRpcConnection < Minitest::Test
   def with_connection(channel, report_on_exception: true, lazy_answers: false)
     ios = send("#{channel}_connection", caller[0], report_on_exception)
     c = Ccrpc::RpcConnection.new(*ios, lazy_answers: lazy_answers)
-    yield(c)
+    res = yield(c)
     c.detach
     ios.each{|io| io.close unless io.closed? }
+    res
   end
 
   def with_ios(channel, report_on_exception: true)
