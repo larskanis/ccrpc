@@ -76,6 +76,7 @@ class RpcConnection
   end
 
   CallbackReceiver = Struct.new :meth, :callbacks
+  ReceivedCallData = Struct.new :cbfunc, :id, :recv_id
 
   attr_accessor :read_io
   attr_accessor :write_io
@@ -88,11 +89,15 @@ class RpcConnection
   #    If enabled the return value of #call is always a Ccrpc::Promise object.
   #    It behaves like an ordinary +nil+ or Hash object, but the actual IO blocking operation is delayed to the first method call on the Promise object.
   #    See {#call} for more description.
-  def initialize(read_io, write_io, lazy_answers: false)
+  # @param [Boolean] binary   Enable or disable the binary protocol.
+  #    The binary protocol is faster, but not easily human readable and can not be used on Windows stdin/stdout/stderr pipes.
+  #    The text protocol is the default.
+  def initialize(read_io, write_io, lazy_answers: false, binary: false)
     super()
 
     @read_io = read_io
     @write_io = write_io
+    @binary = binary
     if lazy_answers
       require 'ccrpc/lazy'
       alias maybe_lazy do_lazy
@@ -117,9 +122,29 @@ class RpcConnection
     @read_enum = Enumerator.new do |y|
       begin
         while @read_enum
-          l = @read_io.gets&.force_encoding(Encoding::BINARY)
-          break if l.nil?
-          y << l
+          if binary
+
+          else
+
+            l = @read_io.gets&.force_encoding(Encoding::BINARY)
+            break if l.nil?
+            m = case l
+              when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
+                # received key/value pair used for either callback parameters or return values
+                [Escape.unescape($1).force_encoding(Encoding::UTF_8), Escape.unescape($2.force_encoding(Encoding::UTF_8))]
+
+              when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
+                # received callback
+                ReceivedCallData.new Escape.unescape($1.force_encoding(Encoding::UTF_8)), $2&.to_i, $3&.to_i
+
+              when /\A\a(\d+)\r?\n\z/mn
+                # received return event
+                $1.to_i
+              else
+                raise InvalidResponse, "invalid response #{l.inspect}"
+            end
+          end
+          y << m
         end
       rescue => err
         y << err
@@ -239,16 +264,24 @@ class RpcConnection
     to_send = String.new
     @write_mutex.synchronize do
       params.compact.each do |key, value|
-        to_send << Escape.escape(key.to_s) << "\t" <<
-            Escape.escape(value.to_s) << "\n"
+        if @binary
+
+        else
+          to_send << Escape.escape(key.to_s) << "\t" <<
+              Escape.escape(value.to_s) << "\n"
+        end
         if to_send.bytesize > 9999
           @write_io.write to_send
           to_send = String.new
         end
       end
-      to_send << Escape.escape(func.to_s) << "\a#{id}"
-      to_send << "\a#{recv_id}" if recv_id
-      @write_io.write(to_send << "\n")
+      if @binary
+
+      else
+        to_send << Escape.escape(func.to_s) << "\a#{id}"
+        to_send << "\a#{recv_id}" if recv_id
+        @write_io.write(to_send << "\n")
+      end
       @write_io.flush
     end
     after_write
@@ -258,15 +291,23 @@ class RpcConnection
     to_send = String.new
     @write_mutex.synchronize do
       answer.compact.each do |key, value|
-        to_send << Escape.escape(key.to_s) << "\t" <<
-            Escape.escape(value.to_s) << "\n"
+        if @binary
+
+        else
+          to_send << Escape.escape(key.to_s) << "\t" <<
+              Escape.escape(value.to_s) << "\n"
+        end
         if to_send.bytesize > 9999
           @write_io.write to_send
           to_send = String.new
         end
       end
-      to_send << "\a#{id}" if id
-      @write_io.write(to_send << "\n")
+      if @binary
+
+      else
+        to_send << "\a#{id}" if id
+        @write_io.write(to_send << "\n")
+      end
       @write_io.flush
     end
     after_write
@@ -278,27 +319,33 @@ class RpcConnection
       case l
         when Exception
           raise l
-        when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
-          # received key/value pair used for either callback parameters or return values
-          rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
 
-        when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
+        when Array
+          rets[l[0]] ||= l[1]
+        # when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
+        #   # received key/value pair used for either callback parameters or return values
+        #   rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
+
+        when ReceivedCallData
           # received callback
-          cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
+          callback = Call.new(self, l.cbfunc.to_sym, rets, l.id)
 
-          callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
+        # when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
+        #   # received callback
+        #   cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
+        #   callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
 
           @answers_mutex.synchronize do
-            receiver = @receivers[recv_id]
+            receiver = @receivers[l.recv_id]
 
             if !receiver
-              if recv_id
-                raise NoCallbackDefined, "call_back to #{cbfunc.inspect} was received, but corresponding call returned already"
+              if l.recv_id
+                raise NoCallbackDefined, "call_back to #{l.cbfunc.inspect} was received, but corresponding call returned already"
               else
-                raise NoCallbackDefined, "call to #{cbfunc.inspect} was received, but there is no #{self.class}#call running"
+                raise NoCallbackDefined, "call to #{l.cbfunc.inspect} was received, but there is no #{self.class}#call running"
               end
             elsif meth=receiver.meth
-              raise NoCallbackDefined, "call_back to #{cbfunc.inspect} was received, but corresponding call was called without a block in #{meth}"
+              raise NoCallbackDefined, "call_back to #{l.cbfunc.inspect} was received, but corresponding call was called without a block in #{meth}"
             end
 
             receiver.callbacks << callback
@@ -306,9 +353,13 @@ class RpcConnection
           end
           return
 
-        when /\A\a(\d+)\r?\n\z/mn
+        when Integer
           # received return event
-          id = $1.to_i
+          id = l
+
+        # when /\A\a(\d+)\r?\n\z/mn
+        #   # received return event
+        #   id = $1.to_i
           @answers_mutex.synchronize do
             @answers[id] = rets
             @new_answer.broadcast
