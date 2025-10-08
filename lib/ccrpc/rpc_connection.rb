@@ -92,12 +92,19 @@ class RpcConnection
   # @param [Boolean] binary   Enable or disable the binary protocol.
   #    The binary protocol is faster, but not easily human readable and can not be used on Windows stdin/stdout/stderr pipes.
   #    The text protocol is the default.
-  def initialize(read_io, write_io, lazy_answers: false, binary: false)
+  def initialize(read_io, write_io, lazy_answers: false, protocol: :text)
     super()
 
     @read_io = read_io
     @write_io = write_io
-    @binary = binary
+    @binary = case protocol
+      when :binary
+        true
+      when :text, Nilclass
+        false
+      else
+        raise ArgumentError, "invalid protocol: #{protocol.inspect}"
+    end
     if lazy_answers
       require 'ccrpc/lazy'
       alias maybe_lazy do_lazy
@@ -122,12 +129,34 @@ class RpcConnection
     @read_enum = Enumerator.new do |y|
       begin
         while @read_enum
-          if binary
+          if @binary
+            t = @read_io.read(1)&.getbyte(0)
+            m = case t
+            when 1
+              keysize, valsize = @read_io.read(8).unpack("NN")
+              key = @read_io.read(keysize).force_encoding(Encoding::UTF_8)
+              value = @read_io.read(valsize).force_encoding(Encoding::UTF_8)
+              [key, value]
+            when 2
+              id, funcsize = @read_io.read(8).unpack("NN")
+              func = @read_io.read(funcsize)
+              ReceivedCallData.new func.force_encoding(Encoding::UTF_8), id
+            when 3
+              id, recv_id, funcsize = @read_io.read(12).unpack("NNN")
+              func = @read_io.read(funcsize)
+              ReceivedCallData.new func.force_encoding(Encoding::UTF_8), id, recv_id
+            when 4
+              id = @read_io.read(4).unpack1("N")
+              id
+            when NilClass
+              break
+            else
+              raise InvalidResponse, "invalid response #{t.inspect}"
+            end
 
           else
 
             l = @read_io.gets&.force_encoding(Encoding::BINARY)
-            break if l.nil?
             m = case l
               when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
                 # received key/value pair used for either callback parameters or return values
@@ -140,6 +169,8 @@ class RpcConnection
               when /\A\a(\d+)\r?\n\z/mn
                 # received return event
                 $1.to_i
+              when NilClass
+                break
               else
                 raise InvalidResponse, "invalid response #{l.inspect}"
             end
@@ -260,12 +291,14 @@ class RpcConnection
     end
   end
 
-  def send_call(func, params, id, recv_id=nil)
+  def send_call(func, params, id, recv_id)
     to_send = String.new
     @write_mutex.synchronize do
       params.compact.each do |key, value|
         if @binary
-
+          k = key.to_s
+          v = value.to_s
+          to_send << [1, k.bytesize, v.bytesize, k, v].pack("CNNa*a*")
         else
           to_send << Escape.escape(key.to_s) << "\t" <<
               Escape.escape(value.to_s) << "\n"
@@ -276,12 +309,18 @@ class RpcConnection
         end
       end
       if @binary
-
+        f = func.to_s
+        if recv_id
+          to_send << [3, id, recv_id, f.bytesize, f].pack("CNNNa*")
+        else
+          to_send << [2, id, f.bytesize, f].pack("CNNa*")
+        end
       else
         to_send << Escape.escape(func.to_s) << "\a#{id}"
         to_send << "\a#{recv_id}" if recv_id
-        @write_io.write(to_send << "\n")
+        to_send << "\n"
       end
+      @write_io.write(to_send)
       @write_io.flush
     end
     after_write
@@ -292,7 +331,9 @@ class RpcConnection
     @write_mutex.synchronize do
       answer.compact.each do |key, value|
         if @binary
-
+          k = key.to_s
+          v = value.to_s
+          to_send << [1, k.bytesize, v.bytesize, k, v].pack("CNNa*a*")
         else
           to_send << Escape.escape(key.to_s) << "\t" <<
               Escape.escape(value.to_s) << "\n"
@@ -303,11 +344,12 @@ class RpcConnection
         end
       end
       if @binary
-
+        to_send << [4, id].pack("CN")
       else
         to_send << "\a#{id}" if id
-        @write_io.write(to_send << "\n")
+        to_send << "\n"
       end
+      @write_io.write(to_send)
       @write_io.flush
     end
     after_write
@@ -322,18 +364,10 @@ class RpcConnection
 
         when Array
           rets[l[0]] ||= l[1]
-        # when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
-        #   # received key/value pair used for either callback parameters or return values
-        #   rets[Escape.unescape($1).force_encoding(Encoding::UTF_8)] ||= Escape.unescape($2.force_encoding(Encoding::UTF_8))
 
         when ReceivedCallData
           # received callback
           callback = Call.new(self, l.cbfunc.to_sym, rets, l.id)
-
-        # when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
-        #   # received callback
-        #   cbfunc, id, recv_id = $1, $2&.to_i, $3&.to_i
-        #   callback = Call.new(self, Escape.unescape(cbfunc.force_encoding(Encoding::UTF_8)).to_sym, rets, id)
 
           @answers_mutex.synchronize do
             receiver = @receivers[l.recv_id]
@@ -357,9 +391,6 @@ class RpcConnection
           # received return event
           id = l
 
-        # when /\A\a(\d+)\r?\n\z/mn
-        #   # received return event
-        #   id = $1.to_i
           @answers_mutex.synchronize do
             @answers[id] = rets
             @new_answer.broadcast
