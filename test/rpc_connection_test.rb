@@ -7,7 +7,7 @@ require 'timeout'
 # Thread.abort_on_exception = true
 
 class TestRpcConnection < Minitest::Test
-  def pipe_connection(testname, report_on_exception)
+  def pipe_connection(testname, report_on_exception, proto)
     skip "No fork" unless Process.respond_to?(:fork)
 
     ar, aw = IO.pipe
@@ -15,27 +15,27 @@ class TestRpcConnection < Minitest::Test
     fork do
       ar.close
       bw.close
-      eval(server_code("br", "aw"))
+      eval(server_code("br", "aw", proto))
     end
     br.close
     aw.close
     [ar, bw]
   end
 
-  def socket_connection(testname, report_on_exception)
+  def socket_connection(testname, report_on_exception, proto)
     s = TCPServer.new 0
     a = TCPSocket.new "localhost", s.addr[1]
     _b = s.accept
     s.close
 
     Thread.new do
-      eval(server_code("_b", "_b"))
+      eval(server_code("_b", "_b", proto))
     end
 
     [a, a]
   end
 
-  def popen_connection(testname, report_on_exception)
+  def popen_connection(testname, report_on_exception, proto)
     code = <<-EOT
       $: << #{File.expand_path("../../lib", __FILE__).inspect}
       require 'ccrpc'
@@ -52,9 +52,9 @@ class TestRpcConnection < Minitest::Test
     [io, io]
   end
 
-  def server_code(r,w)
+  def server_code(r, w, proto)
     <<-EOT
-      serv = Ccrpc::RpcConnection.new(#{r}, #{w})
+      serv = Ccrpc::RpcConnection.new(#{r}, #{w}, protocol: :#{proto})
       pr = proc do |call|
         case call.func
           when :exit
@@ -94,16 +94,29 @@ class TestRpcConnection < Minitest::Test
   end
 
   %w[pipe socket popen].each do |channel|
-    define_method("test_echo_#{channel}"){ test_echo(channel) }
-    define_method("test_echo_utf8_#{channel}"){ test_echo_utf8(channel) }
-    define_method("test_recursive_#{channel}"){ test_recursive(channel) }
-    define_method("test_threads_#{channel}"){ test_threads(channel) }
-    define_method("test_exit_#{channel}"){ test_exit(channel) }
+    %i[text binary prefer_binary].each do |proto|
+      define_method("test_echo_#{channel}_#{proto}"){ test_echo(channel, proto) }
+      define_method("test_echo_utf8_#{channel}_#{proto}"){ test_echo_utf8(channel, proto) }
+      define_method("test_recursive_#{channel}_#{proto}"){ test_recursive(channel, proto) }
+      define_method("test_threads_#{channel}_#{proto}"){ test_threads(channel, proto) }
+      define_method("test_exit_#{channel}_#{proto}"){ test_exit(channel, proto) }
+      define_method("test_transmission_buffer_overflow_#{channel}_#{proto}"){ test_transmission_buffer_overflow(channel, proto) }
+      define_method("test_call_back_#{channel}_#{proto}"){ test_call_back(channel, proto) }
+    end
+    %i[text binary prefer_binary only_text].each do |proto|
+      %i[text binary prefer_binary only_text].each do |proto2|
+        next if proto == :binary && proto2 == :only_text || proto2 == :binary && proto == :only_text
+        define_method("test_echo_#{channel}_from_#{proto}_to_#{proto2}"){ test_echo_from_text_to_binary(channel, proto, proto2) }
+      end
+    end
     define_method("test_legacy_call_#{channel}"){ test_legacy_call(channel) }
     define_method("test_detach_#{channel}"){ test_detach(channel) }
-    define_method("test_transmission_buffer_overflow_#{channel}"){ test_transmission_buffer_overflow(channel) }
-    define_method("test_call_back_#{channel}"){ test_call_back(channel) }
   end
+
+  %i[text binary prefer_binary].each do |proto|
+    define_method("test_kill_process_#{proto}"){ test_kill_process(proto) }
+  end
+
 
   def test_call_already_returned
     with_connection(:pipe) do |c|
@@ -155,8 +168,19 @@ class TestRpcConnection < Minitest::Test
 
   private
 
-  def with_connection(channel, report_on_exception: true, lazy_answers: false)
-    ios = send("#{channel}_connection", caller[0], report_on_exception)
+  def test_echo_from_text_to_binary(channel, proto1, proto2)
+    with_ios(channel, protocol: proto2) do |*ios|
+      c = Ccrpc::RpcConnection.new(*ios, protocol: proto1)
+      r = c.call('echo', bindata: @bindata)
+      assert_equal({'bindata' => @bindata}, r)
+      r = c.call('callbacko', bindata: @bindata, depth: 0, &method(:process_callback))
+      assert_equal({ 'bindata_back' => @bindata.reverse }, r)
+      c.detach
+    end
+  end
+
+  def with_connection(channel, report_on_exception: true, lazy_answers: false, protocol: :text)
+    ios = send("#{channel}_connection", caller[0], report_on_exception, protocol)
     c = Ccrpc::RpcConnection.new(*ios, lazy_answers: lazy_answers)
     res = yield(c)
     c.detach
@@ -164,22 +188,22 @@ class TestRpcConnection < Minitest::Test
     res
   end
 
-  def with_ios(channel, report_on_exception: true)
-    ios = send("#{channel}_connection", caller[0], report_on_exception)
+  def with_ios(channel, report_on_exception: true, protocol: :text)
+    ios = send("#{channel}_connection", caller[0], report_on_exception, protocol)
     yield(*ios)
     ios.each{|io| io.close unless io.closed? }
   end
 
 
-  def test_echo(channel)
-    with_connection(channel) do |c|
+  def test_echo(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       r = c.call('echo', bindata: @bindata, to_be_removed: nil)
       assert_equal({'bindata' => @bindata}, r)
     end
   end
 
-  def test_echo_utf8(channel)
-    with_connection(channel) do |c|
+  def test_echo_utf8(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       r = c.call('echo', "AbCäöü\x8F\x0E\\\\\t\n\a€" => "aBc\n\a\t\\äÖüß€")
       assert_equal({"AbCäöü\x8F\x0E\\\\\t\n\a€" => "aBc\n\a\t\\äÖüß€"}, r)
     end
@@ -199,15 +223,15 @@ class TestRpcConnection < Minitest::Test
     end
   end
 
-  def test_recursive(channel)
-    with_connection(channel) do |c|
+  def test_recursive(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       r = c.call('callbacko', bindata: @bindata, depth: 0, &method(:process_callback))
       assert_equal({ 'bindata_back' => @bindata.reverse }, r)
     end
   end
 
-  def test_threads(channel)
-    with_connection(channel) do |c|
+  def test_threads(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       ths = 100.times.map do |thx|
         Thread.new do
           c.call('callbacko', depth: 0, thx: thx, bindata: @bindata, &method(:process_callback))
@@ -222,8 +246,8 @@ class TestRpcConnection < Minitest::Test
     end
   end
 
-  def test_exit(channel)
-    with_connection(channel) do |c|
+  def test_exit(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       r = c.call(:exit)
       assert_equal({'shutdown' => 'now'}, r)
       sleep 0.1
@@ -266,8 +290,8 @@ class TestRpcConnection < Minitest::Test
     end
   end
 
-  def test_transmission_buffer_overflow(channel)
-    with_connection(channel) do |c|
+  def test_transmission_buffer_overflow(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       some_data = 'some data '*100
       results = 10000.times.map do |idx|
         c.call('echo_no_thread', idx: idx, data: some_data)
@@ -278,8 +302,8 @@ class TestRpcConnection < Minitest::Test
     end
   end
 
-  def test_call_back(channel)
-    with_connection(channel) do |c|
+  def test_call_back(channel, proto)
+    with_connection(channel, protocol: proto) do |c|
       ths = 100.times.map do |thx|
         Thread.new(thx) do |thy|
           c.call('callbacko') do |call|
@@ -304,10 +328,10 @@ class TestRpcConnection < Minitest::Test
     assert_raises(Ccrpc::RpcConnection::ConnectionDetached){ c.call(:dummy) }
   end
 
-  public def test_kill_process
+  def test_kill_process(proto)
     skip "not reliable on JRuby on Windows" if RUBY_ENGINE=="jruby" && RbConfig::CONFIG['host_os']=~/mingw|mswin/i
-    ios = popen_connection(__method__, true)
-    c = Ccrpc::RpcConnection.new(*ios, lazy_answers: true)
+    ios = popen_connection(__method__, true, proto)
+    c = Ccrpc::RpcConnection.new(*ios, lazy_answers: true, protocol: proto)
     res = c.call(:sleep, sleep: 20)
     sleep 0.1
     Process.kill(9, ios[0].pid)
