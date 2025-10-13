@@ -41,7 +41,11 @@ class TestRpcConnection < Minitest::Test
       require 'ccrpc'
       testname = #{testname.inspect}
       report_on_exception = #{report_on_exception.inspect}
-      #{server_code("STDIN", "STDOUT")}
+      # Use a copy of STDOUT because...
+      stdo = STDOUT.dup
+      # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
+      STDOUT.reopen(STDERR)
+      #{server_code("STDIN", "stdo", proto)}
     EOT
     tf = Tempfile.new('rpc')
     tf.write(code)
