@@ -77,6 +77,7 @@ class RpcConnection
 
   CallbackReceiver = Struct.new :meth, :callbacks
   ReceivedCallData = Struct.new :cbfunc, :id, :recv_id
+  ReceivedProtoChange = Struct.new :cmd
 
   attr_accessor :read_io
   attr_accessor :write_io
@@ -152,10 +153,13 @@ class RpcConnection
                 id = @read_io.read(4).unpack1("N")
                 id
               when "\r".ord
-                if @read_io.read(3) == "\a1\n"
+                # received proto change request
+                l = @read_io.read(3)
+                if l =~ /\A\a(\d+)\n\z/mn
                   # ignore proto change, we're already on binary protocol
+                  ReceivedProtoChange.new($1.to_i)
                 else
-                  raise InvalidResponse, "invalid response #{t.inspect}"
+                  raise InvalidResponse, "invalid response #{l.inspect}"
                 end
               when NilClass
                 # connection closed
@@ -169,17 +173,21 @@ class RpcConnection
 
             l = @read_io.gets&.force_encoding(Encoding::BINARY)
             m = case l
-              when /\A([^\t\a\n]+)\t(.*?)\r?\n\z/mn
+              when /\A([^\t\a\n\r]+)\t(.*?)\r?\n\z/mn
                 # received key/value pair used for either callback parameters or return values
                 [Escape.unescape($1).force_encoding(Encoding::UTF_8), Escape.unescape($2.force_encoding(Encoding::UTF_8))]
 
-              when /\A([^\t\a\n]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
+              when /\A([^\t\a\n\r]+)(?:\a(\d+))?(?:\a(\d+))?\r?\n\z/mn
                 # received callback
                 ReceivedCallData.new Escape.unescape($1.force_encoding(Encoding::UTF_8)), $2&.to_i, $3&.to_i
 
               when /\A\a(\d+)\r?\n\z/mn
                 # received return event
                 $1.to_i
+
+              when /\A\r\a(\d+)\n\z/mn
+                # received proto change request
+                ReceivedProtoChange.new($1.to_i)
 
               when NilClass
                 # connection closed
@@ -197,9 +205,11 @@ class RpcConnection
     end
 
     if @write_binary == true # immediate binary mode
-      # @write_io.write "\r\a1\n"
+      @write_binary_id = register_call("\r")
+      @write_io.write "\r\a1\n"
     elsif @write_binary == nil # acknowledge text/binary mode
-      # @write_io.write "\r\a2\n"
+      @write_binary_id = register_call("\r")
+      @write_io.write "\r\a2\n"
     end
   end
 
@@ -333,16 +343,16 @@ class RpcConnection
   def send_call_or_answer(params)
     to_send = String.new
     @write_mutex.synchronize do
-      # if @write_binary.nil?
-      #   # wait until protocol is acknowledged
-      #
-      #   res = call_intern(nil, nil)
-      #   if res == {O: :K}
-      #     @write_binary = true
-      #   else
-      #     @write_binary = false
-      #   end
-      # end
+      if @write_binary.nil?
+        # wait until protocol is acknowledged
+        res = wait_for_return(@write_binary_id)
+        if res.nil?
+          @write_binary = true
+        else
+          @write_binary = false
+        end
+        @write_binary_id = nil
+      end
       params.compact.each do |key, value|
         if @write_binary
           k = key.to_s
@@ -433,6 +443,17 @@ class RpcConnection
             @new_answer.broadcast
           end
           return
+
+        when ReceivedProtoChange
+          if l.cmd == 1
+            # received protocol change to immediate binary
+            @read_binary = true
+          elsif l.cmd == 2
+            # received protocol change to acknowledged binary
+            @read_binary = true
+            cb.answer = {O: :K}
+          end
+
 
         else
           raise InvalidResponse, "invalid response #{l.inspect}"
