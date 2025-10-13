@@ -77,7 +77,7 @@ class RpcConnection
 
   CallbackReceiver = Struct.new :meth, :callbacks
   ReceivedCallData = Struct.new :cbfunc, :id, :recv_id
-  ReceivedProtoChange = Struct.new :cmd
+  ReceivedProtoChange = Struct.new :acknowledge, :id
 
   attr_accessor :read_io
   attr_accessor :write_io
@@ -99,7 +99,8 @@ class RpcConnection
 
     @read_io = read_io
     @write_io = write_io
-    @binary_write = case protocol
+    @read_binary = false
+    @write_binary = case protocol
       when :binary
         true
       when :text
@@ -120,14 +121,13 @@ class RpcConnection
       @write_io.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_NODELAY, true)
     end
 
-    # A random number as start call ID is not technically required, but makes transferred data more readable.
-    @id = rand(1000)
     @id_mutex = Mutex.new
     @read_mutex = Mutex.new
     @write_mutex = Mutex.new
     @answers = {}
     @receivers = {}
     @answers_mutex = Mutex.new
+    @proto_ack_mutex = Mutex.new
     @new_answer = ConditionVariable.new
 
     @read_enum = Enumerator.new do |y|
@@ -152,21 +152,26 @@ class RpcConnection
               when 4
                 id = @read_io.read(4).unpack1("N")
                 id
-              when "\r".ord
-                # received proto change request
+              when 79 # "O"
                 l = @read_io.read(3)
-                if l =~ /\A\a(\d+)\n\z/mn
-                  # ignore proto change, we're already on binary protocol
-                  ReceivedProtoChange.new($1.to_i)
-                else
-                  raise InvalidResponse, "invalid response #{l.inspect}"
+                unless l == "\tK\n"
+                  raise InvalidResponse, "invalid binary response #{l.inspect}"
                 end
+                ["O", "K"]
+
+              when 7 # "\a"
+                l = @read_io.read(2)
+                unless l == "1\n"
+                  raise InvalidResponse, "invalid binary response #{l.inspect}"
+                end
+                1
+
               when NilClass
                 # connection closed
                 break
 
               else
-                raise InvalidResponse, "invalid response #{t.inspect}"
+                raise InvalidResponse, "invalid binary response #{t.inspect}"
             end
 
           else
@@ -185,16 +190,16 @@ class RpcConnection
                 # received return event
                 $1.to_i
 
-              when /\A\r\a(\d+)\n\z/mn
+              when /\A\r([\0\1])\a(\d+)\n\z/mn
                 # received proto change request
-                ReceivedProtoChange.new($1.to_i)
+                ReceivedProtoChange.new($1 == "\1", $2.to_i)
 
               when NilClass
                 # connection closed
                 break
 
               else
-                raise InvalidResponse, "invalid response #{l.inspect}"
+                raise InvalidResponse, "invalid text response #{l.inspect}"
             end
           end
           y << m
@@ -204,13 +209,17 @@ class RpcConnection
       end
     end
 
+    @id = 0 # Start with ID 1 for proto change request to have a fixed string
     if @write_binary == true # immediate binary mode
-      @write_binary_id = register_call("\r")
-      @write_io.write "\r\a1\n"
+      register_call("\r")
+      @write_io.write "\r\0\a1\n"
     elsif @write_binary == nil # acknowledge text/binary mode
-      @write_binary_id = register_call("\r")
-      @write_io.write "\r\a2\n"
+      register_call("\r")
+      @write_io.write "\r\1\a1\n"
     end
+
+    # A random number as start call ID is not technically required, but makes transferred data more readable.
+    @id = rand(1000) + 1
   end
 
   private def do_lazy(&block)
@@ -278,23 +287,12 @@ class RpcConnection
           if cb=@receivers[id].callbacks.shift
             @answers_mutex.unlock
             begin
-              if cb.func == "\r"
-                if cb.id == 1
-                  # received protocol change to immediate binary
-                  @read_binary = true
-                elsif cb.id == 2
-                  # received protocol change to acknowledged binary
-                  @read_binary = true
-                  cb.answer = {O: :K}
-                end
-              else
-                # normal call to user call
-                rets, exit = yield(cb)
-                if rets
-                  cb.answer = rets
-                end
-                break if exit
+              # invoke the user block
+              rets, exit = yield(cb)
+              if rets
+                cb.answer = rets
               end
+              break if exit
             ensure
               @answers_mutex.lock
             end
@@ -340,19 +338,24 @@ class RpcConnection
     end
   end
 
-  def send_call_or_answer(params)
-    to_send = String.new
-    @write_mutex.synchronize do
+  def wait_for_proto_ack
+    @proto_ack_mutex.synchronize do
       if @write_binary.nil?
         # wait until protocol is acknowledged
-        res = wait_for_return(@write_binary_id)
-        if res.nil?
+        res = wait_for_return(1)
+        if res == {"O" => "K"}
           @write_binary = true
         else
           @write_binary = false
         end
-        @write_binary_id = nil
       end
+    end
+  end
+
+  def send_call_or_answer(params, wait_for_ack)
+    wait_for_proto_ack if wait_for_ack
+    to_send = String.new
+    @write_mutex.synchronize do
       params.compact.each do |key, value|
         if @write_binary
           k = key.to_s
@@ -375,7 +378,7 @@ class RpcConnection
   end
 
   def send_call(func, params, id, recv_id)
-    send_call_or_answer(params) do |to_send|
+    send_call_or_answer(params, true) do |to_send|
       if @write_binary
         f = func.to_s
         if recv_id
@@ -391,8 +394,8 @@ class RpcConnection
     end
   end
 
-  def send_answer(answer, id)
-    send_call_or_answer(answer) do |to_send|
+  def send_answer(answer, id, wait_for_ack: true)
+    send_call_or_answer(answer, wait_for_ack) do |to_send|
       if @write_binary
         to_send << [4, id].pack("CN")
       else
@@ -445,15 +448,10 @@ class RpcConnection
           return
 
         when ReceivedProtoChange
-          if l.cmd == 1
-            # received protocol change to immediate binary
-            @read_binary = true
-          elsif l.cmd == 2
-            # received protocol change to acknowledged binary
-            @read_binary = true
-            cb.answer = {O: :K}
+          @read_binary = true
+          if l.acknowledge
+            send_answer({O: :K}, l.id, wait_for_ack: false)
           end
-
 
         else
           raise InvalidResponse, "invalid response #{l.inspect}"
