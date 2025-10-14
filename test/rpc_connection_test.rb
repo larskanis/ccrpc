@@ -42,17 +42,17 @@ class TestRpcConnection < Minitest::Test
       testname = #{testname.inspect}
       report_on_exception = #{report_on_exception.inspect}
       # Use a copy of STDOUT because...
-      stdo = STDOUT.dup
+      stdo = STDOUT.dup.binmode
       # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
       STDOUT.reopen(STDERR)
-      #{server_code("STDIN", "stdo", proto)}
+      #{server_code("STDIN.binmode", "stdo", proto)}
     EOT
     tf = Tempfile.new('rpc')
     tf.write(code)
     tf.close
     @tempfile = tf # Save the file handle, so that the file not not deleted before opened by ruby (especially on Windows)
 
-    io = IO.popen([RbConfig::CONFIG['ruby_install_name'], tf.path], "w+")
+    io = IO.popen([RbConfig::CONFIG['ruby_install_name'], tf.path], "wb+")
     [io, io]
   end
 
