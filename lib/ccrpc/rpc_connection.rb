@@ -205,8 +205,8 @@ class RpcConnection
       end
     end
 
-    @id = 0 # Start with ID 1 for proto change request to have a fixed string
     if @write_binary == true # immediate binary mode
+      # Use ID 1 for proto change request to have a fixed string over the wire
       register_call("\r", 1)
       @write_io.write "\r\0\a1\n"
       @write_io.flush
