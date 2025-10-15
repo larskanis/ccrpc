@@ -90,9 +90,11 @@ class RpcConnection
   #    It behaves like an ordinary +nil+ or Hash object, but the actual IO blocking operation is delayed to the first method call on the Promise object.
   #    See {#call} for more description.
   # @param [Symbol] protocol   Select the protocol which is used to send calls.
-  #    The +:text+ protocol is the default.
-  #    The +:binary+ protocol is faster, but not easily human readable and can not be used on Windows stdin/stdout/stderr pipes.
-  #    The protocol used to receive calls is selected by the peer.
+  #    * The +:text+ protocol is the classic default.
+  #    * The +:binary+ protocol is faster, but not so readable for human.
+  #    * The +:prefer_binary+ is the same as :binary, but with an initial round-trip to check that the other end is binary-capable (means ccrpc >= 0.5).
+  #    The protocol used to receive calls is selected by the *protocol* option on the other end.
+  #    A connection could use different protocols for both directions, although this has no advantage.
   def initialize(read_io, write_io, lazy_answers: false, protocol: :text)
     super()
 
