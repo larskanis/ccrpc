@@ -3,6 +3,7 @@ require 'tempfile'
 require 'rbconfig'
 require 'socket'
 require 'timeout'
+require 'openssl'
 
 # Thread.abort_on_exception = true
 
@@ -33,6 +34,25 @@ class TestRpcConnection < Minitest::Test
     end
 
     [a, a]
+  end
+
+  def socket_openssl_connection(testname, report_on_exception, proto)
+    context = OpenSSL::SSL::SSLContext.new
+    context.cert, context.key = create_openssl_cert("localhost")
+    s = TCPServer.new 0
+    so = OpenSSL::SSL::SSLServer.new(s, context)
+    a = TCPSocket.new "localhost", s.addr[1]
+    ao = OpenSSL::SSL::SSLSocket.new(a, context)
+    ao.sync_close = true
+    Thread.new{ ao.connect }
+    _b = so.accept
+    so.close
+
+    Thread.new do
+      eval(server_code("_b", "_b", proto))
+    end
+
+    [ao, ao]
   end
 
   def popen_connection(testname, report_on_exception, proto)
@@ -97,7 +117,7 @@ class TestRpcConnection < Minitest::Test
     @bindata = (0..255).inject(String.new){|s,a| s << [a].pack("C") }.force_encoding(Encoding::UTF_8)
   end
 
-  %w[pipe socket popen].each do |channel|
+  %w[pipe socket popen socket_openssl].each do |channel|
     %i[text binary prefer_binary].each do |proto|
       define_method("test_echo_#{channel}_#{proto}"){ test_echo(channel, proto) }
       define_method("test_echo_utf8_#{channel}_#{proto}"){ test_echo_utf8(channel, proto) }
