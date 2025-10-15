@@ -295,6 +295,7 @@ class TestRpcConnection < Minitest::Test
 
   def test_detach(channel)
     with_connection(channel) do |c|
+      skip "close_write isn't supported on #{c.write_io.class}" unless c.write_io.respond_to?(:close_write)
       c.detach
       c.write_io.puts "echo_no_thread"
       c.write_io.close_write
@@ -305,6 +306,7 @@ class TestRpcConnection < Minitest::Test
 
   def test_legacy_call(channel)
     with_ios(channel) do |read_io, write_io|
+      skip "close_write isn't supported on #{write_io.class}" unless write_io.respond_to?(:close_write)
       write_io.puts "a\tb"
       write_io.puts "echo_no_thread"
       write_io.close_write
