@@ -44,7 +44,7 @@ class TestRpcConnection < Minitest::Test
       # Use a copy of STDOUT because...
       stdo = STDOUT.dup.binmode
       # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
-      STDOUT.reopen(STDERR)
+      STDOUT.reopen(STDERR) unless RUBY_ENGINE=="jruby" && RbConfig::CONFIG['host_os']=~/mingw|mswin/i
       #{server_code("STDIN.binmode", "stdo", proto)}
     EOT
     tf = Tempfile.new('rpc')
