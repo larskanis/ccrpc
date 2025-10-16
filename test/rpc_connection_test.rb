@@ -255,6 +255,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   def test_threads(channel, proto)
+    skip "concurrent use of OpenSSL isn't reliable on Truffleruby" if RUBY_ENGINE=="truffleruby"
     with_connection(channel, protocol: proto) do |c|
       ths = 100.times.map do |thx|
         Thread.new do
@@ -329,6 +330,7 @@ class TestRpcConnection < Minitest::Test
   end
 
   def test_call_back(channel, proto)
+    skip "concurrent use of OpenSSL isn't reliable on Truffleruby" if RUBY_ENGINE=="truffleruby"
     with_connection(channel, protocol: proto) do |c|
       ths = 100.times.map do |thx|
         Thread.new(thx) do |thy|
