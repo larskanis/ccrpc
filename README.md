@@ -1,15 +1,16 @@
-# Ccrpc - A minimalistic RPC library for Ruby
+# Ccrpc - A minimalist RPC library for Ruby
 
 Features:
-* Simple human readable wire protocol
-* Works on arbitrary ruby IO objects (Pipes, Sockets, STDIN, STDOUT) even Windows CR/LF converting IOs
+
+* Simple human readable wire protocol and optionally a faster binary protocol
+* Works on arbitrary IO like objects (Pipes, Sockets, STDIN, STDOUT, OpenSSL) even Windows CR/LF converting IOs
 * No object definitions - only plain string transfers (so no issues with undefined classes or garbage collection like in DRb)
 * Each call transfers a function name and a list of parameters in form of a Hash<String=>String>
 * Each response equally transfers a list of parameters
-* Similar to closures, it's possible to respond to a particular call as a call_back
-* Fully asynchronous, either by use of multiple threads or by using lazy_answers, so that arbitrary calls in both directions can be mixed simultaneously without blocking each other
+* Similar to closures, it's possible to respond to a particular call as a `call_back`
+* Fully asynchronous, either by use of multiple threads or by using `lazy_answers`, so that arbitrary calls in both directions can be mixed simultaneously without blocking each other
 * Fully thread safe, but doesn't use additional internal threads
-* Each call_back arrives in the thread of the caller
+* Each `call_back` arrives in the thread of the caller
 * Only dedicated functions can be called (not arbitrary as in DRb)
 * No dependencies
 
@@ -72,7 +73,7 @@ The following example invokes the call in the opposite direction, from the subpr
     require 'ccrpc'
     # Create the receiver side of the connection
     # Use a copy of STDOUT because...
-    rpc = Ccrpc::RpcConnection.new(STDIN, STDOUT.dup)
+    rpc = Ccrpc::RpcConnection.new(STDIN.binmode, STDOUT.dup.binmode)
     # .. STDOUT is now redirected to STDERR, so that pp prints to STDERR
     STDOUT.reopen(STDERR)
     # Call function "hello" with param {"who" => "world"}
@@ -84,10 +85,10 @@ The following example invokes the call in the opposite direction, from the subpr
   tf.write(code)
   tf.flush
   # Execute the temp file in a subprocess
-  io = IO.popen(['ruby', tf.path], "w+")
+  io = IO.popen(['ruby', tf.path], "wb+")
 
   # Create the caller side of the connection
-  rpc = Ccrpc::RpcConnection.new(io, io)
+  rpc = Ccrpc::RpcConnection.new(io, io, protocol: :binary)
   # Wait for calls
   rpc.call do |call|
     # Print the received call data to STDERR
