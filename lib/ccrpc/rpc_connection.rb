@@ -78,7 +78,9 @@ class RpcConnection
   CallbackReceiver = Struct.new :meth, :callbacks
   ReceivedCallData = Struct.new :cbfunc, :id, :recv_id
 
+  # The kind of +IO+ object used to receive calls and answers. Set by {initialize}.
   attr_accessor :read_io
+  # The kind of +IO+ object used to send calls and answers. Set by {initialize}.
   attr_accessor :write_io
 
   # Create a RPC connection
@@ -225,11 +227,11 @@ class RpcConnection
     yield
   end
 
-  # Disable reception of data from the read_io object.
+  # Disable reception of data from the {read_io} object.
   #
-  # This function doesn't close the IO objects.
+  # This function doesn't close the +IO+ objects.
   # A waiting reception is not aborted by this call.
-  # It can be aborted by calling IO#close on the underlying read_io and write_io objects.
+  # It can be aborted by calling +IO#close+ on the underlying {read_io} and {write_io} objects.
   def detach
     @read_enum = nil
   end
@@ -237,9 +239,9 @@ class RpcConnection
   # Do a RPC call and/or wait for a RPC call from the other side.
   #
   # {#call} must be called with either a function name (and optional parameters) or with a block or with both.
-  # If {#call} is called with a function name, the block on the other side of the RPC connection is called with that function name.
-  # If {#call} is called with a block only, than it receives these kind of calls, which are called anonymous callbacks.
-  # If {#call} is called with a function name and a block, then the RPC function on the other side is called and it is possible to call back to this dedicated block by invoking {Call#call_back} .
+  # * If called with a function name, the block on the other end of the RPC connection is called with that function name.
+  # * If called with a block only, than it receives these kind of calls, which are called anonymous callbacks.
+  # * If called with a function name and a block, then the RPC function on the other side is called and it is possible to call back to this dedicated block by invoking {Call#call_back} .
   #
   # @param func [String, Symbol]  The RPC function to be called on the other side.
   #   The other side must wait for calls through {#call} without arguments but with a block.
@@ -256,9 +258,9 @@ class RpcConnection
   #   This type of answers can be enabled by +RpcConnection#new(lazy_answers: true)+
   #   The Promise object is returned as soon as the RPC call is sent and a callback receiver is registered, but before waiting for the corresponding answer.
   #   This way several calls can be send in parallel without using threads.
-  #   As soon as a method is called on the Promise object, this method is blocked until the RPC answer was received.
-  #   The Promise object then behaves like a Hash or +nil+ object.
-  #   It is recommended to use Promise#itself to trigger waiting for call answers or callbacks (although any other method triggers waiting as well).
+  #   As soon as any method is called on the Promise object, this method is blocked until the RPC answer was received.
+  #   When the RPC answer has been received, the Promise object then behaves like an ordinary Hash object or +nil+ in case of connection end.
+  #   It is recommended to use +Promise#itself+ to trigger explicit waiting for call answers or callbacks (although any other method triggers waiting as well).
   # @return [NilClass] Waiting for further answers was stopped gracefully by either returning +[hash, true]+ from the block or because the connection was closed.
   def call(func=nil, params={}, &block)
     call_intern(func, params, &block)
