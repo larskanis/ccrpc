@@ -90,6 +90,7 @@ class TestRpcConnection < Minitest::Test
             call.params
           else
             th = Thread.new do
+              Thread.current.report_on_exception = report_on_exception
               call.answer = case call.func
                 when :echo
                   call.params
@@ -102,7 +103,6 @@ class TestRpcConnection < Minitest::Test
               end
             end
             th.name = testname
-            th.report_on_exception = report_on_exception
             nil
         end
       end
